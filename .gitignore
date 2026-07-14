@@ -1,0 +1,7 @@
+# Godot 4+ specific ignores
+.godot/
+/android/
+__pycache__/
+*.py[cod]
+# Added by code-review-graph
+.code-review-graph/

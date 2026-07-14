@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "start_date": "2026-01-01",
+  "player_country_code": "KOR",
+  "items": [
+    {"id":"feed","display_name":"사료","kind":"essential","base_price":10,"demand_per_index":0.80,"standard_of_living_weight":1.5},
+    {"id":"clothing","display_name":"의류","kind":"essential","base_price":15,"demand_per_index":0.35,"standard_of_living_weight":1.2},
+    {"id":"furniture","display_name":"가구","kind":"essential","base_price":25,"demand_per_index":0.12,"standard_of_living_weight":0.8},
+    {"id":"porcelain","display_name":"도자기","kind":"essential","base_price":20,"demand_per_index":0.15,"standard_of_living_weight":0.7},
+    {"id":"soap","display_name":"비누","kind":"essential","base_price":8,"demand_per_index":0.28,"standard_of_living_weight":1.0},
+    {"id":"wood","display_name":"목재","kind":"resource","base_price":12,"demand_per_index":0},
+    {"id":"concrete","display_name":"콘크리트","kind":"resource","base_price":18,"demand_per_index":0},
+    {"id":"steel","display_name":"철강","kind":"resource","base_price":30,"demand_per_index":0},
+    {"id":"glass","display_name":"유리","kind":"resource","base_price":16,"demand_per_index":0},
+    {"id":"churu","display_name":"츄르","kind":"luxury","base_price":20,"demand_per_index":0.25,"standard_of_living_weight":1.0},
+    {"id":"toy","display_name":"장난감","kind":"luxury","base_price":22,"demand_per_index":0.14,"standard_of_living_weight":1.0},
+    {"id":"catnip","display_name":"개다래나무","kind":"luxury","base_price":18,"demand_per_index":0.12,"standard_of_living_weight":1.0},
+    {"id":"premium_feed","display_name":"고급 사료","kind":"luxury","base_price":28,"demand_per_index":0.18,"standard_of_living_weight":1.0}
+  ],
+  "countries": {
+    "KOR": {
+      "demand_index":10,"treasury":50000,"tax_rate":0.20,"standard_of_living":6.0,
+      "consumer_ratio":40,"civilian_factories":10,"military_factories":3,"dockyards":2,
+      "leader":{"id":"haerong","name":"해롱 대장","trait":"실용적인 중재자","color":"#5DADE2","portrait":"res://assets/cat_leader_placeholder.svg"},
+      "production_allocations":{"feed":1,"clothing":1,"soap":1,"steel":1},
+      "resources":{"wood":60,"concrete":80,"steel":70,"glass":30}
+    },
+    "CHN": {
+      "demand_index":24,"treasury":90000,"tax_rate":0.20,"standard_of_living":5.0,
+      "consumer_ratio":45,"civilian_factories":18,"military_factories":6,"dockyards":3,
+      "leader":{"id":"hongmao","name":"홍묘 주석","trait":"대규모 생산자","color":"#E74C3C","portrait":"res://assets/cat_leader_placeholder.svg"},
+      "production_allocations":{"feed":2,"clothing":1,"soap":1,"wood":1,"concrete":1,"steel":1,"glass":1},
+      "resources":{"wood":160,"concrete":200,"steel":180,"glass":100}
+    },
+    "JPN": {
+      "demand_index":14,"treasury":65000,"tax_rate":0.20,"standard_of_living":6.5,
+      "consumer_ratio":50,"civilian_factories":12,"military_factories":4,"dockyards":4,
+      "leader":{"id":"mike","name":"미케 총리","trait":"정밀한 상인","color":"#F5B7B1","portrait":"res://assets/cat_leader_placeholder.svg"},
+      "production_allocations":{"feed":1,"clothing":1,"furniture":1,"soap":1,"steel":1,"glass":1},
+      "resources":{"wood":100,"concrete":120,"steel":90,"glass":80}
+    }
+  }
+}

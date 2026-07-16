@@ -1,7 +1,12 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "start_date": "2026-01-01",
   "player_country_code": "KOR",
+  "tax_parameters": {
+    "civilian_factory_tax_value": 100.0,
+    "consumption_tax_alpha": 0.1,
+    "property_tax_alpha": 0.01
+  },
   "items": [
     {"id":"feed","display_name":"사료","kind":"essential","base_price":10,"demand_per_index":0.80,"standard_of_living_weight":1.5},
     {"id":"clothing","display_name":"의류","kind":"essential","base_price":15,"demand_per_index":0.35,"standard_of_living_weight":1.2},
@@ -19,21 +24,28 @@
   ],
   "countries": {
     "KOR": {
-      "demand_index":10,"treasury":50000,"tax_rate":0.20,"standard_of_living":6.0,
+      "demand_index":10,"treasury":50000,"consumption_tax_rate":0.20,"property_tax_rate":0.20,"standard_of_living":6.0,
       "consumer_ratio":40,"civilian_factories":10,"military_factories":3,"dockyards":2,
       "leader":{"id":"haerong","name":"해롱 대장","trait":"실용적인 중재자","color":"#5DADE2","portrait":"res://assets/cat_leader_placeholder.svg"},
       "production_allocations":{"feed":1,"clothing":1,"soap":1,"steel":1},
       "resources":{"wood":60,"concrete":80,"steel":70,"glass":30}
     },
+    "PRK": {
+      "demand_index":8,"treasury":38000,"consumption_tax_rate":0.20,"property_tax_rate":0.20,"standard_of_living":4.0,
+      "consumer_ratio":45,"civilian_factories":8,"military_factories":4,"dockyards":1,
+      "leader":{"id":"heukmyo","name":"흑묘 위원장","trait":"완고한 동원가","color":"#A93226","portrait":"res://assets/cat_leader_placeholder.svg"},
+      "production_allocations":{"feed":1,"clothing":1,"soap":1},
+      "resources":{"wood":70,"concrete":90,"steel":100,"glass":35}
+    },
     "CHN": {
-      "demand_index":24,"treasury":90000,"tax_rate":0.20,"standard_of_living":5.0,
+      "demand_index":24,"treasury":90000,"consumption_tax_rate":0.20,"property_tax_rate":0.20,"standard_of_living":5.0,
       "consumer_ratio":45,"civilian_factories":18,"military_factories":6,"dockyards":3,
       "leader":{"id":"hongmao","name":"홍묘 주석","trait":"대규모 생산자","color":"#E74C3C","portrait":"res://assets/cat_leader_placeholder.svg"},
       "production_allocations":{"feed":2,"clothing":1,"soap":1,"wood":1,"concrete":1,"steel":1,"glass":1},
       "resources":{"wood":160,"concrete":200,"steel":180,"glass":100}
     },
     "JPN": {
-      "demand_index":14,"treasury":65000,"tax_rate":0.20,"standard_of_living":6.5,
+      "demand_index":14,"treasury":65000,"consumption_tax_rate":0.20,"property_tax_rate":0.20,"standard_of_living":6.5,
       "consumer_ratio":50,"civilian_factories":12,"military_factories":4,"dockyards":4,
       "leader":{"id":"mike","name":"미케 총리","trait":"정밀한 상인","color":"#F5B7B1","portrait":"res://assets/cat_leader_placeholder.svg"},
       "production_allocations":{"feed":1,"clothing":1,"furniture":1,"soap":1,"steel":1,"glass":1},

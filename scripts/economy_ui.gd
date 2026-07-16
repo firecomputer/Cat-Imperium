@@ -11,6 +11,7 @@ var _economy_rows: Dictionary = {}
 
 var _date_label: Label
 var _treasury_label: Label
+var _gdp_label: Label
 var _tax_income_label: Label
 var _living_standard_label: Label
 var _factory_label: Label
@@ -19,8 +20,10 @@ var _leader_name: Label
 var _leader_trait: Label
 var _consumer_slider: HSlider
 var _consumer_value: Label
-var _tax_slider: HSlider
-var _tax_value: Label
+var _consumption_tax_slider: HSlider
+var _consumption_tax_value: Label
+var _property_tax_slider: HSlider
+var _property_tax_value: Label
 var _economy_scroll: ScrollContainer
 var _construction_scroll: ScrollContainer
 var _province_title: Label
@@ -53,14 +56,15 @@ func _build_ui() -> void:
 	top_panel.offset_bottom = 54.0
 	root_control.add_child(top_panel)
 	var top_bar := HBoxContainer.new()
-	top_bar.add_theme_constant_override("separation", 18)
+	top_bar.add_theme_constant_override("separation", 10)
 	top_panel.add_child(top_bar)
-	_date_label = _new_label("1턴 | 2026-01-01", 150)
-	_treasury_label = _new_label("국고 -", 130)
-	_tax_income_label = _new_label("세수 -", 120)
-	_living_standard_label = _new_label("생활수준 -", 115)
-	_factory_label = _new_label("민간공장 -", 250)
-	for label: Label in [_date_label, _treasury_label, _tax_income_label, _living_standard_label, _factory_label]:
+	_date_label = _new_label("1턴 | 2026-01-01", 135)
+	_treasury_label = _new_label("국고 -", 105)
+	_gdp_label = _new_label("실질 GDP -", 125)
+	_tax_income_label = _new_label("세수 -", 205)
+	_living_standard_label = _new_label("생활수준 -", 100)
+	_factory_label = _new_label("민간공장 -", 205)
+	for label: Label in [_date_label, _treasury_label, _gdp_label, _tax_income_label, _living_standard_label, _factory_label]:
 		top_bar.add_child(label)
 	var spacer := Control.new()
 	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -169,18 +173,30 @@ func _build_economy_content() -> void:
 	consumer_line.add_child(_consumer_slider)
 	_consumer_value = _new_label("40%", 45)
 	consumer_line.add_child(_consumer_value)
-	var tax_line := HBoxContainer.new()
-	content.add_child(tax_line)
-	tax_line.add_child(_new_label("세율", 88))
-	_tax_slider = HSlider.new()
-	_tax_slider.min_value = 0
-	_tax_slider.max_value = 50
-	_tax_slider.step = 1
-	_tax_slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_tax_slider.value_changed.connect(_on_tax_rate_changed)
-	tax_line.add_child(_tax_slider)
-	_tax_value = _new_label("20%", 45)
-	tax_line.add_child(_tax_value)
+	var consumption_tax_line := HBoxContainer.new()
+	content.add_child(consumption_tax_line)
+	consumption_tax_line.add_child(_new_label("소비세율", 88))
+	_consumption_tax_slider = HSlider.new()
+	_consumption_tax_slider.min_value = 0
+	_consumption_tax_slider.max_value = 50
+	_consumption_tax_slider.step = 1
+	_consumption_tax_slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_consumption_tax_slider.value_changed.connect(_on_consumption_tax_rate_changed)
+	consumption_tax_line.add_child(_consumption_tax_slider)
+	_consumption_tax_value = _new_label("20%", 45)
+	consumption_tax_line.add_child(_consumption_tax_value)
+	var property_tax_line := HBoxContainer.new()
+	content.add_child(property_tax_line)
+	property_tax_line.add_child(_new_label("재산세율", 88))
+	_property_tax_slider = HSlider.new()
+	_property_tax_slider.min_value = 0
+	_property_tax_slider.max_value = 50
+	_property_tax_slider.step = 1
+	_property_tax_slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_property_tax_slider.value_changed.connect(_on_property_tax_rate_changed)
+	property_tax_line.add_child(_property_tax_slider)
+	_property_tax_value = _new_label("20%", 45)
+	property_tax_line.add_child(_property_tax_value)
 
 	var separator := HSeparator.new()
 	content.add_child(separator)
@@ -295,7 +311,12 @@ func _refresh_all() -> void:
 	_refreshing = true
 	_date_label.text = "%d턴 | %s" % [GameState.current_turn, GameState.get_date_string()]
 	_treasury_label.text = "국고 ₩%s" % _compact_number(country.treasury)
-	_tax_income_label.text = "주간 세수 ₩%s" % _compact_number(float(country.weekly_stats.get("tax_revenue", 0.0)))
+	_gdp_label.text = "실질 GDP ₩%s" % _compact_number(country.real_gdp)
+	_tax_income_label.text = "세수 ₩%s (소 %s / 재 %s)" % [
+		_compact_number(float(country.weekly_stats.get("tax_revenue", 0.0))),
+		_compact_number(float(country.weekly_stats.get("consumption_tax_revenue", 0.0))),
+		_compact_number(float(country.weekly_stats.get("property_tax_revenue", 0.0))),
+	]
 	_living_standard_label.text = "생활수준 %.2f" % country.standard_of_living
 	_factory_label.text = "민간 %d: 소비 %d / 건설 %d / 무역 %d" % [
 		country.civilian_factories,
@@ -310,8 +331,10 @@ func _refresh_all() -> void:
 		_leader_portrait.texture = _load_svg_texture(country.leader_portrait)
 	_consumer_slider.value = country.consumer_ratio
 	_consumer_value.text = "%d%%" % country.consumer_ratio
-	_tax_slider.value = country.tax_rate * 100.0
-	_tax_value.text = "%d%%" % roundi(country.tax_rate * 100.0)
+	_consumption_tax_slider.value = country.consumption_tax_rate * 100.0
+	_consumption_tax_value.text = "%d%%" % roundi(country.consumption_tax_rate * 100.0)
+	_property_tax_slider.value = country.property_tax_rate * 100.0
+	_property_tax_value.text = "%d%%" % roundi(country.property_tax_rate * 100.0)
 	for item_id: StringName in GameState.item_order:
 		var item = GameState.get_item(item_id)
 		var row: Dictionary = _economy_rows[item_id]
@@ -410,10 +433,16 @@ func _on_consumer_ratio_changed(value: float) -> void:
 	_show_result(GameState.set_consumer_ratio(GameState.player_country_id, roundi(value)))
 
 
-func _on_tax_rate_changed(value: float) -> void:
+func _on_consumption_tax_rate_changed(value: float) -> void:
 	if _refreshing:
 		return
-	_show_result(GameState.set_tax_rate(GameState.player_country_id, roundi(value)))
+	_show_result(GameState.set_consumption_tax_rate(GameState.player_country_id, roundi(value)))
+
+
+func _on_property_tax_rate_changed(value: float) -> void:
+	if _refreshing:
+		return
+	_show_result(GameState.set_property_tax_rate(GameState.player_country_id, roundi(value)))
 
 
 func _on_adjust_allocation(item_id: StringName, delta: int) -> void:

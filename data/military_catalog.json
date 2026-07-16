@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "items": [
+    {"id":"infantry_equipment","display_name":"보병 장비","category":"military","equipment_group":"infantry","production_per_factory":120,"combat_value":1.0,"reliability":85,"input_materials":{"steel":0.05}},
+    {"id":"radio","display_name":"무전기","category":"military","equipment_group":"support","production_per_factory":24,"combat_value":4.0,"reliability":80,"input_materials":{"steel":0.08,"glass":0.04}},
+    {"id":"medical_equipment","display_name":"의료 장비","category":"military","equipment_group":"medical","production_per_factory":36,"combat_value":0.5,"reliability":90,"input_materials":{"clothing":0.08,"glass":0.03}},
+    {"id":"supply_equipment","display_name":"보급 장비","category":"military","equipment_group":"supply","production_per_factory":48,"combat_value":1.5,"reliability":85,"input_materials":{"wood":0.05,"steel":0.04}},
+    {"id":"tank","display_name":"전차","category":"military","equipment_group":"armor","production_per_factory":2,"combat_value":30.0,"reliability":70,"input_materials":{"steel":8.0}},
+    {"id":"armored_vehicle","display_name":"장갑차","category":"military","equipment_group":"armor","production_per_factory":5,"combat_value":12.0,"reliability":78,"input_materials":{"steel":3.0}},
+    {"id":"fighter","display_name":"전투기","category":"military","equipment_group":"aircraft","production_per_factory":1,"combat_value":35.0,"reliability":75,"input_materials":{"steel":10.0,"glass":2.0}},
+    {"id":"close_air_support","display_name":"근접지원항공기","category":"military","equipment_group":"aircraft","production_per_factory":1,"combat_value":28.0,"reliability":72,"input_materials":{"steel":9.0,"glass":2.0}},
+    {"id":"bomber","display_name":"폭격기","category":"military","equipment_group":"aircraft","production_per_factory":0.5,"combat_value":40.0,"reliability":68,"input_materials":{"steel":14.0,"glass":3.0}}
+  ],
+  "countries": {
+    "KOR": {
+      "available_manpower":120000,
+      "stockpile":{"infantry_equipment":25000,"radio":1200,"medical_equipment":1600,"supply_equipment":3000,"tank":120,"armored_vehicle":240,"fighter":40,"close_air_support":20},
+      "production_lines":[{"id":"KOR-line-001","item_id":"infantry_equipment","assigned_factories":2},{"id":"KOR-line-002","item_id":"supply_equipment","assigned_factories":1}],
+      "armies":[{"id":"KOR-army-001","name":"대한민국 제1군","personnel":60000,"equipment_targets":{"infantry_equipment":60000,"radio":6000,"medical_equipment":6000,"supply_equipment":12000,"tank":300,"armored_vehicle":900}}]
+    },
+    "PRK": {
+      "available_manpower":150000,
+      "stockpile":{"infantry_equipment":36000,"radio":900,"medical_equipment":1200,"supply_equipment":3200,"tank":160,"armored_vehicle":180,"fighter":30,"close_air_support":15},
+      "production_lines":[{"id":"PRK-line-001","item_id":"infantry_equipment","assigned_factories":3},{"id":"PRK-line-002","item_id":"supply_equipment","assigned_factories":1}],
+      "armies":[{"id":"PRK-army-001","name":"조선인민군 제1군","personnel":80000,"equipment_targets":{"infantry_equipment":80000,"radio":8000,"medical_equipment":8000,"supply_equipment":16000,"tank":400,"armored_vehicle":800}}]
+    },
+    "CHN": {
+      "available_manpower":500000,
+      "stockpile":{"infantry_equipment":120000,"radio":5000,"medical_equipment":7000,"supply_equipment":15000,"tank":600,"armored_vehicle":1200,"fighter":120,"close_air_support":80,"bomber":30},
+      "production_lines":[{"id":"CHN-line-001","item_id":"infantry_equipment","assigned_factories":4},{"id":"CHN-line-002","item_id":"tank","assigned_factories":1},{"id":"CHN-line-003","item_id":"supply_equipment","assigned_factories":1}],
+      "armies":[{"id":"CHN-army-001","name":"중국 제1집단군","personnel":150000,"equipment_targets":{"infantry_equipment":150000,"radio":15000,"medical_equipment":15000,"supply_equipment":30000,"tank":1200,"armored_vehicle":1800}},{"id":"CHN-army-002","name":"중국 제2집단군","personnel":150000,"equipment_targets":{"infantry_equipment":150000,"radio":15000,"medical_equipment":15000,"supply_equipment":30000,"tank":1200,"armored_vehicle":1800}}]
+    },
+    "JPN": {
+      "available_manpower":180000,
+      "stockpile":{"infantry_equipment":50000,"radio":3000,"medical_equipment":3500,"supply_equipment":7000,"tank":200,"armored_vehicle":500,"fighter":100,"close_air_support":45,"bomber":20},
+      "production_lines":[{"id":"JPN-line-001","item_id":"infantry_equipment","assigned_factories":2},{"id":"JPN-line-002","item_id":"fighter","assigned_factories":1},{"id":"JPN-line-003","item_id":"supply_equipment","assigned_factories":1}],
+      "armies":[{"id":"JPN-army-001","name":"일본 제1군","personnel":80000,"equipment_targets":{"infantry_equipment":80000,"radio":8000,"medical_equipment":8000,"supply_equipment":16000,"tank":300,"armored_vehicle":900}}]
+    }
+  }
+}

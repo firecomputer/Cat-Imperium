@@ -25,7 +25,7 @@ func _run() -> void:
 	country.load_map_record(korea_record)
 	if not _check(country.id == 25, "Unexpected KOR country ID"):
 		return
-	if not _check(country.gdp == 1646739.0, "Unexpected KOR GDP"):
+	if not _check(is_zero_approx(country.real_gdp), "Map reference GDP leaked into the simulated real GDP"):
 		return
 	if not _check(country.population == 51709098, "Unexpected KOR population"):
 		return

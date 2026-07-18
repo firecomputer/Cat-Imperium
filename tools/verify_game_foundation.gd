@@ -25,7 +25,7 @@ func _run() -> void:
 	country.load_map_record(korea_record)
 	if not _check(country.id == 25, "Unexpected KOR country ID"):
 		return
-	if not _check(is_zero_approx(country.real_gdp), "Map reference GDP leaked into the simulated real GDP"):
+	if not _check(is_equal_approx(country.real_gdp, 1646739.0), "KOR map GDP was not used as the starting real GDP"):
 		return
 	if not _check(country.population == 51709098, "Unexpected KOR population"):
 		return
@@ -118,13 +118,50 @@ func _run() -> void:
 	var map_material := main.get_node("ProvinceMap").material as ShaderMaterial
 	if not _check(bool(map_material.get_shader_parameter("has_selection")), "Province selection was not sent to the shader"):
 		return
+	var korea = game_state.get_country_by_code(&"KOR")
+	var korean_province_id: int = korea.owned_province_ids[0]
+	var displayed_korean_color: Color = main.call("_display_color_for_province", korean_province_id)
+	if not _check(
+		int(main.call("_display_controller_id", korean_province_id)) == korea.id
+		and displayed_korean_color.is_equal_approx(korea.leader_color)
+		and map_material.get_shader_parameter("political_palette") is Texture2D,
+		"Political map did not display Korea's actual province control and country color"
+	):
+		return
+	var north_korea = game_state.get_country_by_code(&"PRK")
+	var war_result: Dictionary = game_state.declare_war(korea.id, north_korea.id)
+	if not _check(war_result.ok, "Political-map front test could not declare war"):
+		return
+	var war: Dictionary = game_state.get_war(StringName(str(war_result.war_id)))
+	var front_id := StringName(str(war.get("front_ids", [""])[0]))
+	var front: Dictionary = game_state.get_front(front_id)
+	var front_province_id := int(front.get("country_a_provinces", [0])[0])
+	if not _check(
+		front_province_id > 0
+		and bool(main.call("_is_front_province", front_province_id))
+		and map_material.get_shader_parameter("front_palette") is Texture2D,
+		"Actual KOR-PRK border did not reach the visible front overlay"
+	):
+		return
+	var captured_province_id := int(front.get("country_b_provinces", [0])[0])
+	var captured_state: Dictionary = game_state.province_states[captured_province_id]
+	captured_state.controller_country_id = korea.id
+	game_state.province_states[captured_province_id] = captured_state
+	game_state.province_control_changed.emit(captured_province_id, north_korea.id, korea.id)
+	var captured_display_color: Color = main.call("_display_color_for_province", captured_province_id)
+	if not _check(
+		int(main.call("_display_controller_id", captured_province_id)) == korea.id
+		and captured_display_color.is_equal_approx(korea.leader_color),
+		"A province-control change did not recolor the political map"
+	):
+		return
 	main.call("_set_selected_province", 0)
 	if not _check(main.selected_province_id == 0, "Water selection did not clear the province"):
 		return
 	if not _check(not bool(map_material.get_shader_parameter("has_selection")), "Cleared selection remained active in the shader"):
 		return
 
-	print("OK: game data models, sample country, camera bounds, zoom, and selection verified")
+	print("OK: game data models, political ownership colors, visible fronts, camera, zoom, and selection verified")
 	quit(0)
 
 

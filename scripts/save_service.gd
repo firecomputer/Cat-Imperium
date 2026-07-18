@@ -78,6 +78,30 @@ func migrate_v2(data: Dictionary, scenario_id: String) -> Dictionary:
 	return {"ok": true, "message": "", "data": migrated}
 
 
+func migrate_v3(data: Dictionary, default_snapshot: Dictionary, scenario_id: String) -> Dictionary:
+	if int(data.get("schema_version", -1)) != 3:
+		return {"ok": true, "message": "", "data": data}
+	if str(data.get("scenario_id", "")) != scenario_id:
+		return _result(false, "지원하지 않는 이전 시나리오 저장 파일입니다.")
+	var default_by_id := {}
+	for default_country: Dictionary in default_snapshot.get("countries", []):
+		default_by_id[int(default_country.get("id", 0))] = default_country
+	var migrated := data.duplicate(true)
+	migrated.schema_version = int(default_snapshot.get("schema_version", 4))
+	for country_data: Dictionary in migrated.get("countries", []):
+		var country_id := int(country_data.get("id", 0))
+		var default_country: Dictionary = default_by_id.get(country_id, {})
+		if default_country.is_empty():
+			return _result(false, "이전 저장 파일에 알 수 없는 국가가 있습니다.")
+		country_data.real_gdp = float(default_country.get("real_gdp", 0.0))
+		country_data.weekly_output_value_history = default_country.get(
+			"weekly_output_value_history",
+			[]
+		).duplicate()
+		country_data.erase("weekly_real_gdp_history")
+	return {"ok": true, "message": "", "data": migrated}
+
+
 func write_file(path: String, data: Dictionary) -> Dictionary:
 	var temporary_path := "%s.tmp" % path
 	var file := FileAccess.open(temporary_path, FileAccess.WRITE)
@@ -136,6 +160,7 @@ func validate(data: Dictionary, context: Dictionary) -> Dictionary:
 	var items_by_id: Dictionary = context.items_by_id
 	var construction_requirements: Dictionary = context.construction_requirements
 	var construction_days := int(context.construction_days)
+	var gdp_history_weeks := int(context.get("gdp_history_weeks", 52))
 	var equipment_by_id: Dictionary = context.get("equipment_by_id", {})
 	var province_states: Dictionary = context.get("province_states", {})
 	var active_country_ids: Dictionary = context.get("active_country_ids", {})
@@ -166,22 +191,12 @@ func validate(data: Dictionary, context: Dictionary) -> Dictionary:
 			or int(country_data.get("consumer_ratio", 101)) > 100
 		):
 			return _result(false, "저장된 국가 경제 수치가 잘못되었습니다.")
-		var gdp_history: Variant = country_data.get("weekly_real_gdp_history", [])
-		if typeof(gdp_history) != TYPE_ARRAY or gdp_history.size() > 12:
-			return _result(false, "저장된 실질 GDP 이력이 잘못되었습니다.")
-		var gdp_history_total := 0.0
-		for weekly_value: Variant in gdp_history:
+		var output_history: Variant = country_data.get("weekly_output_value_history", [])
+		if typeof(output_history) != TYPE_ARRAY or output_history.size() != gdp_history_weeks:
+			return _result(false, "저장된 GDP 산출 이력이 잘못되었습니다.")
+		for weekly_value: Variant in output_history:
 			if not _is_nonnegative_number(weekly_value):
-				return _result(false, "저장된 실질 GDP 이력이 잘못되었습니다.")
-			gdp_history_total += float(weekly_value)
-		if (
-			not gdp_history.is_empty()
-			and not is_equal_approx(
-				float(country_data.real_gdp),
-				gdp_history_total / float(gdp_history.size()) * 52.0
-			)
-		):
-			return _result(false, "저장된 실질 GDP와 이력이 일치하지 않습니다.")
+				return _result(false, "저장된 GDP 산출 이력이 잘못되었습니다.")
 		var inventory: Dictionary = country_data.get("inventory", {})
 		var prices: Dictionary = country_data.get("prices", {})
 		for item_id: StringName in item_order:

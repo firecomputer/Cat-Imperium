@@ -3,20 +3,48 @@ extends RefCounted
 const ItemClass = preload("res://scripts/item.gd")
 
 const WEEKS_PER_YEAR := 52.0
-const REAL_GDP_HISTORY_WEEKS := 12
+const OUTPUT_EPSILON := 0.000001
 
 var civilian_factory_tax_value := 100.0
-var consumption_tax_alpha := 0.1
-var property_tax_alpha := 0.01
+var consumption_tax_alpha := 5.0
+var property_tax_alpha := 0.005
+var trade_dollars_per_factory := 100.0
+var gdp_output_elasticity := 0.25
+var gdp_max_annual_change := 0.12
+var gdp_short_window_weeks := 12
+var gdp_long_window_weeks := 52
 
 
-func configure(tax_parameters: Dictionary) -> void:
+func configure(
+	tax_parameters: Dictionary,
+	gdp_parameters: Dictionary,
+	trade_parameters: Dictionary
+) -> void:
 	civilian_factory_tax_value = maxf(
 		float(tax_parameters.get("civilian_factory_tax_value", 100.0)),
 		0.0
 	)
-	consumption_tax_alpha = maxf(float(tax_parameters.get("consumption_tax_alpha", 0.1)), 0.0)
-	property_tax_alpha = maxf(float(tax_parameters.get("property_tax_alpha", 0.01)), 0.0)
+	consumption_tax_alpha = maxf(float(tax_parameters.get("consumption_tax_alpha", 5.0)), 0.0)
+	property_tax_alpha = maxf(float(tax_parameters.get("property_tax_alpha", 0.005)), 0.0)
+	trade_dollars_per_factory = maxf(
+		float(trade_parameters.get("dollars_per_factory", 100.0)),
+		0.0
+	)
+	gdp_output_elasticity = clampf(
+		float(gdp_parameters.get("output_elasticity", 0.25)),
+		OUTPUT_EPSILON,
+		1.0
+	)
+	gdp_max_annual_change = clampf(
+		float(gdp_parameters.get("max_annual_change", 0.12)),
+		OUTPUT_EPSILON,
+		0.99
+	)
+	gdp_short_window_weeks = maxi(int(gdp_parameters.get("short_window_weeks", 12)), 1)
+	gdp_long_window_weeks = maxi(
+		int(gdp_parameters.get("long_window_weeks", 52)),
+		gdp_short_window_weeks
+	)
 
 
 func initialize_country_market(
@@ -38,6 +66,10 @@ func initialize_country_market(
 			country.inventory[item_id] = calculate_demand(country, item) * turns
 	country.reset_weekly_stats(item_order)
 	ensure_allocations(country, items_by_id, item_order)
+	var reference_output_value := _configured_output_value(country, items_by_id, item_order)
+	country.weekly_output_value_history.clear()
+	for _week: int in gdp_long_window_weeks:
+		country.weekly_output_value_history.append(reference_output_value)
 
 
 func advance_week(
@@ -106,6 +138,12 @@ func calculate_demand(country: Resource, item: ItemClass) -> float:
 	return maxf(demand, 0.0)
 
 
+func get_trade_dollar_capacity(country: Resource) -> float:
+	if country == null:
+		return 0.0
+	return float(country.get_trade_factories()) * trade_dollars_per_factory
+
+
 func _produce_goods(countries: Array, items_by_id: Dictionary, item_order: Array[StringName]) -> void:
 	for country: Resource in countries:
 		for item_id: StringName in item_order:
@@ -123,12 +161,14 @@ func _produce_goods(countries: Array, items_by_id: Dictionary, item_order: Array
 func _run_trade(countries: Array, items_by_id: Dictionary, item_order: Array[StringName]) -> void:
 	var countries_by_id := {}
 	var working_inventory := {}
-	var working_treasury := {}
+	var working_trade_dollars := {}
 	var requests: Array = []
 	for country: Resource in countries:
 		countries_by_id[country.id] = country
 		working_inventory[country.id] = country.inventory.duplicate(true)
-		working_treasury[country.id] = country.treasury
+		var trade_dollar_capacity := get_trade_dollar_capacity(country)
+		working_trade_dollars[country.id] = trade_dollar_capacity
+		country.weekly_stats.trade_dollars_generated = trade_dollar_capacity
 		var candidates := _trade_candidates(country, working_inventory[country.id], items_by_id, item_order)
 		if candidates.is_empty():
 			continue
@@ -155,15 +195,21 @@ func _run_trade(countries: Array, items_by_id: Dictionary, item_order: Array[Str
 			var quantity := minf(item.trade_batch_size, maxf(surplus, 0.0))
 			var seller_price := float(seller.prices.get(item_id, item.base_price))
 			var unit_cost := seller_price * 1.1
-			quantity = minf(quantity, float(working_treasury[buyer.id]) / maxf(unit_cost, 0.001))
+			quantity = minf(
+				quantity,
+				float(working_trade_dollars[buyer.id]) / maxf(unit_cost, 0.001)
+			)
 			if quantity < 0.01:
 				continue
+			var transaction_cost := quantity * unit_cost
 			buyer_stock[item_id] = float(buyer_stock.get(item_id, 0.0)) + quantity
 			seller_stock[item_id] = float(seller_stock.get(item_id, 0.0)) - quantity
 			working_inventory[buyer.id] = buyer_stock
 			working_inventory[seller.id] = seller_stock
-			working_treasury[buyer.id] = float(working_treasury[buyer.id]) - quantity * unit_cost
-			working_treasury[seller.id] = float(working_treasury[seller.id]) + quantity * seller_price
+			working_trade_dollars[buyer.id] = maxf(
+				float(working_trade_dollars[buyer.id]) - transaction_cost,
+				0.0
+			)
 			transactions.append({
 				"buyer": buyer,
 				"seller": seller,
@@ -174,7 +220,6 @@ func _run_trade(countries: Array, items_by_id: Dictionary, item_order: Array[Str
 			break
 	for country: Resource in countries:
 		country.inventory = working_inventory[country.id]
-		country.treasury = float(working_treasury[country.id])
 	for transaction: Dictionary in transactions:
 		var buyer_stats: Dictionary = transaction.buyer.weekly_stats[transaction.item_id]
 		buyer_stats.imported = float(buyer_stats.imported) + float(transaction.quantity)
@@ -183,6 +228,9 @@ func _run_trade(countries: Array, items_by_id: Dictionary, item_order: Array[Str
 		transaction.buyer.weekly_stats[transaction.item_id] = buyer_stats
 		transaction.buyer.weekly_stats.import_value = (
 			float(transaction.buyer.weekly_stats.import_value) + import_value
+		)
+		transaction.buyer.weekly_stats.trade_dollars_spent = (
+			float(transaction.buyer.weekly_stats.trade_dollars_spent) + import_value
 		)
 		var seller_stats: Dictionary = transaction.seller.weekly_stats[transaction.item_id]
 		seller_stats.exported = float(seller_stats.exported) + float(transaction.quantity)
@@ -300,26 +348,24 @@ func _consume_and_update_economies(
 		var domestic_production_value := 0.0
 		for item_id: StringName in item_order:
 			var item: ItemClass = items_by_id[item_id]
-			if item.civilian_kind == ItemClass.CivilianKind.RESOURCE:
-				continue
 			var stats: Dictionary = country.weekly_stats[item_id]
 			domestic_production_value += (
 				float(stats.produced) * float(country.prices.get(item_id, item.base_price))
 			)
-		var weekly_real_gdp := maxf(
-			float(country.standard_of_living) * 0.1 * domestic_production_value,
-			0.0
+		country.weekly_output_value_history.append(maxf(domestic_production_value, 0.0))
+		while country.weekly_output_value_history.size() > gdp_long_window_weeks:
+			country.weekly_output_value_history.pop_front()
+		var short_term_output := _history_average(
+			country.weekly_output_value_history,
+			gdp_short_window_weeks
 		)
-		country.weekly_real_gdp_history.append(weekly_real_gdp)
-		while country.weekly_real_gdp_history.size() > REAL_GDP_HISTORY_WEEKS:
-			country.weekly_real_gdp_history.pop_front()
-		var rolling_gdp_total := 0.0
-		for weekly_value: float in country.weekly_real_gdp_history:
-			rolling_gdp_total += weekly_value
-		country.real_gdp = (
-			rolling_gdp_total / maxf(float(country.weekly_real_gdp_history.size()), 1.0)
-			* WEEKS_PER_YEAR
+		var long_term_output := _history_average(
+			country.weekly_output_value_history,
+			gdp_long_window_weeks
 		)
+		var annual_gdp_growth := _annual_gdp_growth(short_term_output, long_term_output)
+		var weekly_gdp_factor := pow(1.0 + annual_gdp_growth, 1.0 / WEEKS_PER_YEAR)
+		country.real_gdp *= weekly_gdp_factor
 
 		var factory_tax_value := (
 			float(country.get_allocated_consumer_factories()) * civilian_factory_tax_value
@@ -341,11 +387,49 @@ func _consume_and_update_economies(
 		var tax_revenue := consumption_tax_revenue + property_tax_revenue
 		country.treasury += tax_revenue
 		country.weekly_stats.domestic_production_value = domestic_production_value
-		country.weekly_stats.weekly_real_gdp = weekly_real_gdp
+		country.weekly_stats.short_term_output_value = short_term_output
+		country.weekly_stats.long_term_output_value = long_term_output
+		country.weekly_stats.annual_gdp_growth_rate = annual_gdp_growth
 		country.weekly_stats.consumption_value = consumption_value
 		country.weekly_stats.consumption_tax_revenue = consumption_tax_revenue
 		country.weekly_stats.property_tax_revenue = property_tax_revenue
 		country.weekly_stats.tax_revenue = tax_revenue
+
+
+func _configured_output_value(
+	country: Resource,
+	items_by_id: Dictionary,
+	item_order: Array[StringName]
+) -> float:
+	var output_value := 0.0
+	for item_id: StringName in item_order:
+		var factories := int(country.production_allocations.get(item_id, 0))
+		if factories <= 0:
+			continue
+		var item: ItemClass = items_by_id[item_id]
+		output_value += factories * item.production_per_factory * item.base_price
+	return maxf(output_value, 0.0)
+
+
+func _history_average(history: Array[float], requested_weeks: int) -> float:
+	var sample_count := mini(requested_weeks, history.size())
+	if sample_count <= 0:
+		return 0.0
+	var total := 0.0
+	for index: int in range(history.size() - sample_count, history.size()):
+		total += history[index]
+	return total / float(sample_count)
+
+
+func _annual_gdp_growth(short_term_output: float, long_term_output: float) -> float:
+	if long_term_output <= OUTPUT_EPSILON:
+		return gdp_max_annual_change if short_term_output > OUTPUT_EPSILON else -gdp_max_annual_change
+	var output_ratio := maxf(short_term_output / long_term_output, 0.0)
+	return clampf(
+		pow(output_ratio, gdp_output_elasticity) - 1.0,
+		-gdp_max_annual_change,
+		gdp_max_annual_change
+	)
 
 
 func _target_inventory(country: Resource, item: ItemClass) -> float:

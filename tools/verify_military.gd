@@ -214,7 +214,8 @@ func _verify_save_v3_v2_and_v1_migration() -> bool:
 		_game_state.wars_by_id.has(saved_war_id)
 		and is_equal_approx(korea.consumption_tax_rate, 0.27)
 		and is_equal_approx(korea.property_tax_rate, 0.27)
-		and is_zero_approx(korea.real_gdp),
+		and is_equal_approx(korea.real_gdp, 1646739.0)
+		and korea.weekly_output_value_history.size() == 52,
 		"v2 migration did not preserve military state and split the legacy tax rate"
 	):
 		return false

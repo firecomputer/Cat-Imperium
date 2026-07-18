@@ -15,7 +15,7 @@ signal game_loaded
 const ECONOMY_CATALOG_PATH := "res://data/economy_catalog.json"
 const MILITARY_CATALOG_PATH := "res://data/military_catalog.json"
 const DEFAULT_SAVE_PATH := "user://savegame.json"
-const SAVE_SCHEMA_VERSION := 3
+const SAVE_SCHEMA_VERSION := 4
 const LEGACY_SCENARIO_ID := "east_asia_economy"
 const SCENARIO_ID := "east_asia_military"
 const ACTIVE_COUNTRY_CODES: Array[StringName] = [&"KOR", &"PRK", &"CHN", &"JPN"]
@@ -117,6 +117,10 @@ func get_date_string() -> String:
 
 func get_construction_requirements(building_type: StringName) -> Dictionary:
 	return _construction_service.get_requirements(building_type)
+
+
+func get_trade_dollar_capacity(country_id: int) -> float:
+	return _economy_service.get_trade_dollar_capacity(get_country(country_id))
 
 
 func start_scenario(scenario_id: String = SCENARIO_ID) -> Dictionary:
@@ -402,6 +406,11 @@ func load_game(path: String = DEFAULT_SAVE_PATH) -> Dictionary:
 		if not migration.ok:
 			return migration
 		data = migration.data
+	if int(data.get("schema_version", -1)) == 3:
+		var migration := _save_service.migrate_v3(data, _scenario_default_snapshot, SCENARIO_ID)
+		if not migration.ok:
+			return migration
+		data = migration.data
 	var active_country_ids := {}
 	for country: CountryClass in _ordered_countries():
 		active_country_ids[country.id] = true
@@ -415,6 +424,7 @@ func load_game(path: String = DEFAULT_SAVE_PATH) -> Dictionary:
 		"items_by_id": items_by_id,
 		"construction_requirements": CONSTRUCTION_REQUIREMENTS,
 		"construction_days": CONSTRUCTION_DAYS,
+		"gdp_history_weeks": _economy_service.gdp_long_window_weeks,
 		"equipment_by_id": equipment_by_id,
 		"province_states": province_states,
 		"active_country_ids": active_country_ids,
@@ -468,7 +478,36 @@ func _load_catalog() -> Dictionary:
 			or float(tax_parameters[key]) < 0.0
 		):
 			return _result(false, "경제 세금 보정값이 잘못되었습니다.")
-	_economy_service.configure(tax_parameters)
+	var gdp_parameters: Dictionary = _catalog.get("gdp_parameters", {})
+	for key: String in ["output_elasticity", "max_annual_change", "short_window_weeks", "long_window_weeks"]:
+		if (
+			not gdp_parameters.has(key)
+			or typeof(gdp_parameters[key]) not in [TYPE_INT, TYPE_FLOAT]
+			or not is_finite(float(gdp_parameters[key]))
+		):
+			return _result(false, "GDP 성장 보정값이 잘못되었습니다.")
+	var output_elasticity := float(gdp_parameters.output_elasticity)
+	var max_annual_change := float(gdp_parameters.max_annual_change)
+	var short_window_weeks := int(gdp_parameters.short_window_weeks)
+	var long_window_weeks := int(gdp_parameters.long_window_weeks)
+	if (
+		output_elasticity <= 0.0
+		or output_elasticity > 1.0
+		or max_annual_change <= 0.0
+		or max_annual_change >= 1.0
+		or short_window_weeks <= 0
+		or long_window_weeks < short_window_weeks
+	):
+		return _result(false, "GDP 성장 보정값이 잘못되었습니다.")
+	var trade_parameters: Dictionary = _catalog.get("trade_parameters", {})
+	if (
+		not trade_parameters.has("dollars_per_factory")
+		or typeof(trade_parameters.dollars_per_factory) not in [TYPE_INT, TYPE_FLOAT]
+		or not is_finite(float(trade_parameters.dollars_per_factory))
+		or float(trade_parameters.dollars_per_factory) < 0.0
+	):
+		return _result(false, "민간 무역 달러 보정값이 잘못되었습니다.")
+	_economy_service.configure(tax_parameters, gdp_parameters, trade_parameters)
 	items_by_id.clear()
 	item_order.clear()
 	for record: Dictionary in _catalog.get("items", []):

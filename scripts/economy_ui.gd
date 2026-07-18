@@ -4,6 +4,7 @@ const PANEL_WIDTH := 450.0
 const MUTED := Color("#9cabc2")
 const GOOD := Color("#7bd88f")
 const BAD := Color("#ff7b72")
+const MilitaryUIClass = preload("res://scripts/military_ui.gd")
 
 var selected_province_id := 0
 var _refreshing := false
@@ -20,12 +21,15 @@ var _leader_name: Label
 var _leader_trait: Label
 var _consumer_slider: HSlider
 var _consumer_value: Label
+var _trade_dollars_label: Label
 var _consumption_tax_slider: HSlider
 var _consumption_tax_value: Label
 var _property_tax_slider: HSlider
 var _property_tax_value: Label
 var _economy_scroll: ScrollContainer
 var _construction_scroll: ScrollContainer
+var _military_scroll: ScrollContainer
+var _military_panel: VBoxContainer
 var _province_title: Label
 var _province_detail: Label
 var _project_detail: Label
@@ -128,6 +132,11 @@ func _build_ui() -> void:
 	construction_tab.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	construction_tab.pressed.connect(_show_construction)
 	tabs.add_child(construction_tab)
+	var military_tab := Button.new()
+	military_tab.text = "군사"
+	military_tab.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	military_tab.pressed.connect(_show_military)
+	tabs.add_child(military_tab)
 
 	_economy_scroll = ScrollContainer.new()
 	_economy_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -138,6 +147,13 @@ func _build_ui() -> void:
 	_construction_scroll.visible = false
 	right_box.add_child(_construction_scroll)
 	_build_construction_content()
+	_military_scroll = ScrollContainer.new()
+	_military_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_military_scroll.visible = false
+	right_box.add_child(_military_scroll)
+	_military_panel = MilitaryUIClass.new()
+	_military_panel.result_reported.connect(_show_result)
+	_military_scroll.add_child(_military_panel)
 
 	var status_panel := PanelContainer.new()
 	status_panel.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
@@ -173,6 +189,9 @@ func _build_economy_content() -> void:
 	consumer_line.add_child(_consumer_slider)
 	_consumer_value = _new_label("40%", 45)
 	consumer_line.add_child(_consumer_value)
+	_trade_dollars_label = _new_label("무역 구매력 -", 0)
+	_trade_dollars_label.add_theme_color_override("font_color", MUTED)
+	content.add_child(_trade_dollars_label)
 	var consumption_tax_line := HBoxContainer.new()
 	content.add_child(consumption_tax_line)
 	consumption_tax_line.add_child(_new_label("소비세율", 88))
@@ -269,9 +288,9 @@ func _build_construction_content() -> void:
 	_project_detail.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	content.add_child(_project_detail)
 	for building: Dictionary in [
-		{"id": GameState.BUILDING_CIVILIAN, "name": "민간공장", "cost": "₩5,000 | 목30 콘40 철20 유10"},
-		{"id": GameState.BUILDING_MILITARY, "name": "군수공장", "cost": "₩7,500 | 목20 콘40 철40 유10"},
-		{"id": GameState.BUILDING_DOCKYARD, "name": "조선소", "cost": "₩8,000 | 목40 콘30 철30 유10"},
+		{"id": GameState.BUILDING_CIVILIAN, "name": "민간공장", "cost": "$5,000 | 목30 콘40 철20 유10"},
+		{"id": GameState.BUILDING_MILITARY, "name": "군수공장", "cost": "$7,500 | 목20 콘40 철40 유10"},
+		{"id": GameState.BUILDING_DOCKYARD, "name": "조선소", "cost": "$8,000 | 목40 콘30 철30 유10"},
 	]:
 		var button := Button.new()
 		button.text = "%s 건설\n%s · 100일" % [building.name, building.cost]
@@ -310,9 +329,9 @@ func _refresh_all() -> void:
 		return
 	_refreshing = true
 	_date_label.text = "%d턴 | %s" % [GameState.current_turn, GameState.get_date_string()]
-	_treasury_label.text = "국고 ₩%s" % _compact_number(country.treasury)
-	_gdp_label.text = "실질 GDP ₩%s" % _compact_number(country.real_gdp)
-	_tax_income_label.text = "세수 ₩%s (소 %s / 재 %s)" % [
+	_treasury_label.text = "국고 $%s" % _compact_number(country.treasury)
+	_gdp_label.text = "실질 GDP %s" % _format_gdp(country.real_gdp)
+	_tax_income_label.text = "세수 $%s (소 %s / 재 %s)" % [
 		_compact_number(float(country.weekly_stats.get("tax_revenue", 0.0))),
 		_compact_number(float(country.weekly_stats.get("consumption_tax_revenue", 0.0))),
 		_compact_number(float(country.weekly_stats.get("property_tax_revenue", 0.0))),
@@ -331,6 +350,10 @@ func _refresh_all() -> void:
 		_leader_portrait.texture = _load_svg_texture(country.leader_portrait)
 	_consumer_slider.value = country.consumer_ratio
 	_consumer_value.text = "%d%%" % country.consumer_ratio
+	_trade_dollars_label.text = "무역 구매력 $%s/주 | 직전 사용 $%s" % [
+		_compact_number(GameState.get_trade_dollar_capacity(country.id)),
+		_compact_number(float(country.weekly_stats.get("trade_dollars_spent", 0.0))),
+	]
 	_consumption_tax_slider.value = country.consumption_tax_rate * 100.0
 	_consumption_tax_value.text = "%d%%" % roundi(country.consumption_tax_rate * 100.0)
 	_property_tax_slider.value = country.property_tax_rate * 100.0
@@ -375,12 +398,24 @@ func _refresh_construction() -> void:
 		_cancel_button.disabled = true
 		return
 	var province: Dictionary = ProvinceMapDB.get_province(selected_province_id)
-	var owner = GameState.get_country(int(province.get("country_id", 0)))
-	var owner_name := str(province.get("country_name_ko", province.get("country_name", "알 수 없음")))
-	_province_title.text = "%s 프로빈스 #%d" % [owner_name, selected_province_id]
+	var province_state: Dictionary = GameState.get_province_state(selected_province_id)
+	var owner_id := int(province_state.get("owner_country_id", province.get("country_id", 0)))
+	var controller_id := int(province_state.get("controller_country_id", owner_id))
+	var owner = GameState.get_country(owner_id)
+	var controller = GameState.get_country(controller_id)
+	var static_owner_name := str(province.get("country_name_ko", province.get("country_name", "알 수 없음")))
+	var owner_name: String = owner.display_name if owner != null else static_owner_name
+	var controller_name: String = controller.display_name if controller != null else owner_name
+	_province_title.text = "%s 프로빈스 #%d" % [controller_name, selected_province_id]
 	var coast := "해안" if bool(province.get("water_border", false)) else "내륙"
-	var buildings: Dictionary = country.province_buildings.get(selected_province_id, {})
-	_province_detail.text = "%s · 면적 %.0f㎢\n건물: 민간 %d / 군수 %d / 조선소 %d" % [
+	var buildings: Dictionary = (
+		controller.province_buildings.get(selected_province_id, {})
+		if controller != null
+		else {}
+	)
+	_province_detail.text = "소유: %s · 지배: %s\n%s · 면적 %.0f㎢\n건물: 민간 %d / 군수 %d / 조선소 %d" % [
+		owner_name,
+		controller_name,
 		coast,
 		float(province.get("area_km2", 0.0)),
 		int(buildings.get(GameState.BUILDING_CIVILIAN, 0)),
@@ -392,9 +427,9 @@ func _refresh_construction() -> void:
 		if int(project.province_id) == selected_province_id:
 			selected_project = project
 			break
-	var is_owned: bool = owner != null and owner.id == country.id
-	if not is_owned:
-		_project_detail.text = "다른 국가의 프로빈스에는 건설할 수 없습니다."
+	var is_controlled: bool = controller != null and controller.id == country.id
+	if not is_controlled:
+		_project_detail.text = "대한민국이 지배하지 않는 프로빈스에는 건설할 수 없습니다."
 	elif not selected_project.is_empty():
 		_project_detail.text = "%s 건설 중 · %d일 남음" % [
 			_building_name(StringName(selected_project.building_type)),
@@ -402,7 +437,7 @@ func _refresh_construction() -> void:
 		]
 	else:
 		_project_detail.text = "건설 슬롯 사용 가능"
-	_set_build_buttons_disabled(not is_owned or not selected_project.is_empty())
+	_set_build_buttons_disabled(not is_controlled or not selected_project.is_empty())
 	_build_buttons[GameState.BUILDING_DOCKYARD].disabled = (
 		_build_buttons[GameState.BUILDING_DOCKYARD].disabled
 		or not bool(province.get("water_border", false))
@@ -476,22 +511,35 @@ func _on_construction_changed(country_id: int, _province_id: int) -> void:
 func _on_province_selected(province_id: int) -> void:
 	selected_province_id = province_id
 	_refresh_construction()
+	if _military_panel != null:
+		_military_panel.set_selected_province(province_id)
 
 
 func _on_province_selection_cleared() -> void:
 	selected_province_id = 0
 	_refresh_construction()
+	if _military_panel != null:
+		_military_panel.set_selected_province(0)
 
 
 func _show_economy() -> void:
 	_economy_scroll.visible = true
 	_construction_scroll.visible = false
+	_military_scroll.visible = false
 
 
 func _show_construction() -> void:
 	_economy_scroll.visible = false
 	_construction_scroll.visible = true
+	_military_scroll.visible = false
 	_refresh_construction()
+
+
+func _show_military() -> void:
+	_economy_scroll.visible = false
+	_construction_scroll.visible = false
+	_military_scroll.visible = true
+	_military_panel.refresh()
 
 
 func _show_result(result: Dictionary) -> void:
@@ -525,6 +573,14 @@ func _compact_number(value: float) -> String:
 	if absf(value) >= 1000.0:
 		return "%.1fk" % (value / 1000.0)
 	return "%.0f" % value
+
+
+func _format_gdp(million_usd: float) -> String:
+	if absf(million_usd) >= 1000000.0:
+		return "$%.2fT" % (million_usd / 1000000.0)
+	if absf(million_usd) >= 1000.0:
+		return "$%.1fB" % (million_usd / 1000.0)
+	return "$%.0fM" % million_usd
 
 
 func _load_svg_texture(path: String) -> Texture2D:

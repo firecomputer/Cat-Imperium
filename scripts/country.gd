@@ -55,7 +55,7 @@ var inventory: Dictionary = {}
 var prices: Dictionary = {}
 var production_allocations: Dictionary = {}
 var weekly_stats: Dictionary = {}
-var weekly_real_gdp_history: Array[float] = []
+var weekly_output_value_history: Array[float] = []
 var province_buildings: Dictionary = {}
 var construction_projects: Array = []
 var military_stockpile: Dictionary = {}
@@ -69,8 +69,8 @@ func load_map_record(record: Dictionary) -> void:
 	code = StringName(str(record.get("code", "")))
 	var localized_name := str(record.get("name_ko", ""))
 	display_name = localized_name if not localized_name.is_empty() else str(record.get("name", ""))
-	real_gdp = 0.0
-	weekly_real_gdp_history.clear()
+	real_gdp = float(record.get("gdp_million_usd", 0.0))
+	weekly_output_value_history.clear()
 	population = roundi(float(record.get("population_estimate", 0.0)))
 	owned_province_ids.clear()
 	for province_id: Variant in record.get("province_ids", []):
@@ -137,8 +137,12 @@ func get_trade_factories() -> int:
 func reset_weekly_stats(item_ids: Array[StringName]) -> void:
 	weekly_stats = {
 		"domestic_production_value": 0.0,
-		"weekly_real_gdp": 0.0,
+		"short_term_output_value": 0.0,
+		"long_term_output_value": 0.0,
+		"annual_gdp_growth_rate": 0.0,
 		"import_value": 0.0,
+		"trade_dollars_generated": 0.0,
+		"trade_dollars_spent": 0.0,
 		"consumption_value": 0.0,
 		"consumption_tax_revenue": 0.0,
 		"property_tax_revenue": 0.0,
@@ -160,7 +164,7 @@ func to_save_data() -> Dictionary:
 		"id": id,
 		"treasury": treasury,
 		"real_gdp": real_gdp,
-		"weekly_real_gdp_history": weekly_real_gdp_history.duplicate(),
+		"weekly_output_value_history": weekly_output_value_history.duplicate(),
 		"consumption_tax_rate": consumption_tax_rate,
 		"property_tax_rate": property_tax_rate,
 		"standard_of_living": standard_of_living,
@@ -185,15 +189,11 @@ func to_save_data() -> Dictionary:
 func apply_save_data(data: Dictionary) -> void:
 	treasury = float(data.get("treasury", treasury))
 	real_gdp = float(data.get("real_gdp", real_gdp))
-	weekly_real_gdp_history.clear()
-	var saved_gdp_history: Variant = data.get("weekly_real_gdp_history", [])
-	if typeof(saved_gdp_history) == TYPE_ARRAY and not saved_gdp_history.is_empty():
-		for weekly_value: Variant in saved_gdp_history:
-			weekly_real_gdp_history.append(maxf(float(weekly_value), 0.0))
-	elif real_gdp > 0.0:
-		var legacy_weekly_gdp := real_gdp / 52.0
-		for _week: int in 12:
-			weekly_real_gdp_history.append(legacy_weekly_gdp)
+	weekly_output_value_history.clear()
+	var saved_output_history: Variant = data.get("weekly_output_value_history", [])
+	if typeof(saved_output_history) == TYPE_ARRAY:
+		for weekly_value: Variant in saved_output_history:
+			weekly_output_value_history.append(maxf(float(weekly_value), 0.0))
 	consumption_tax_rate = float(data.get("consumption_tax_rate", consumption_tax_rate))
 	property_tax_rate = float(data.get("property_tax_rate", property_tax_rate))
 	standard_of_living = float(data.get("standard_of_living", standard_of_living))

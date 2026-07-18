@@ -6,6 +6,7 @@ signal province_selection_cleared
 const MOVE_SPEED_SCREEN_PIXELS := 800.0
 const ZOOM_STEP := 1.2
 const MAX_ZOOM := 4.0
+const PROVINCE_PALETTE_SIZE := 128
 
 @onready var map_sprite: Sprite2D = %ProvinceMap
 @onready var camera: Camera2D = %MapCamera
@@ -14,13 +15,24 @@ var selected_province_id := 0
 var _map_size := Vector2.ZERO
 var _minimum_zoom := 1.0
 var _map_material: ShaderMaterial
+var _political_palette_image: Image
+var _political_palette_texture: ImageTexture
+var _front_palette_image: Image
+var _front_palette_texture: ImageTexture
 
 
 func _ready() -> void:
 	_map_size = map_sprite.texture.get_size()
 	map_sprite.position = _map_size * 0.5
 	_map_material = map_sprite.material as ShaderMaterial
+	_map_material.set_shader_parameter("province_id_texture", map_sprite.texture)
 	get_viewport().size_changed.connect(_on_viewport_size_changed)
+	GameState.initialized.connect(_refresh_map_overlays)
+	GameState.game_loaded.connect(_refresh_map_overlays)
+	GameState.province_control_changed.connect(_on_province_control_changed)
+	GameState.fronts_changed.connect(_on_fronts_changed)
+	GameState.war_state_changed.connect(_on_war_state_changed)
+	_refresh_map_overlays()
 	_update_camera_for_viewport(true)
 
 
@@ -130,3 +142,126 @@ func _set_selected_province(province_id: int) -> void:
 	)
 	_map_material.set_shader_parameter("has_selection", true)
 	province_selected.emit(province_id)
+
+
+func _refresh_map_overlays() -> void:
+	_rebuild_political_palette()
+	_rebuild_front_palette()
+
+
+func _rebuild_political_palette() -> void:
+	var image := Image.create(
+		PROVINCE_PALETTE_SIZE,
+		PROVINCE_PALETTE_SIZE,
+		false,
+		Image.FORMAT_RGBA8
+	)
+	image.fill(Color(0.0, 0.0, 0.0, 0.0))
+	var country_colors := {}
+	for country_record: Dictionary in ProvinceMapDB.countries:
+		var country_id := int(country_record.get("id", 0))
+		if country_id > 0:
+			country_colors[country_id] = _country_map_color(country_id)
+	for province: Dictionary in ProvinceMapDB.provinces:
+		var province_id := int(province.get("id", 0))
+		if province_id <= 0 or province_id >= PROVINCE_PALETTE_SIZE * PROVINCE_PALETTE_SIZE:
+			continue
+		var controller_id := _province_controller_id(province_id, province)
+		var country_color: Color = country_colors.get(
+			controller_id,
+			_country_map_color(controller_id)
+		)
+		var pixel := _palette_position(province_id)
+		image.set_pixel(
+			pixel.x,
+			pixel.y,
+			Color(country_color.r, country_color.g, country_color.b, 1.0)
+		)
+	_political_palette_image = image
+	if _political_palette_texture == null:
+		_political_palette_texture = ImageTexture.create_from_image(image)
+		_map_material.set_shader_parameter("political_palette", _political_palette_texture)
+	else:
+		_political_palette_texture.update(image)
+
+
+func _rebuild_front_palette() -> void:
+	var image := Image.create(
+		PROVINCE_PALETTE_SIZE,
+		PROVINCE_PALETTE_SIZE,
+		false,
+		Image.FORMAT_R8
+	)
+	image.fill(Color.BLACK)
+	for front: Dictionary in GameState.fronts_by_id.values():
+		for key: String in ["country_a_provinces", "country_b_provinces"]:
+			for province_id_value: Variant in front.get(key, []):
+				var province_id := int(province_id_value)
+				if province_id <= 0 or province_id >= PROVINCE_PALETTE_SIZE * PROVINCE_PALETTE_SIZE:
+					continue
+				var pixel := _palette_position(province_id)
+				image.set_pixel(pixel.x, pixel.y, Color.WHITE)
+	_front_palette_image = image
+	if _front_palette_texture == null:
+		_front_palette_texture = ImageTexture.create_from_image(image)
+		_map_material.set_shader_parameter("front_palette", _front_palette_texture)
+	else:
+		_front_palette_texture.update(image)
+
+
+func _province_controller_id(province_id: int, province: Dictionary = {}) -> int:
+	var state: Dictionary = GameState.province_states.get(province_id, {})
+	if not state.is_empty():
+		return int(state.get("controller_country_id", 0))
+	var record := province if not province.is_empty() else ProvinceMapDB.get_province(province_id)
+	return int(record.get("country_id", 0))
+
+
+func _country_map_color(country_id: int) -> Color:
+	var active_country = GameState.get_country(country_id)
+	if active_country != null:
+		return active_country.leader_color
+	var hue := fposmod(float(country_id) * 0.61803398875, 1.0)
+	return Color.from_hsv(hue, 0.52, 0.76)
+
+
+func _palette_position(province_id: int) -> Vector2i:
+	return Vector2i(
+		province_id % PROVINCE_PALETTE_SIZE,
+		province_id / PROVINCE_PALETTE_SIZE
+	)
+
+
+func _display_controller_id(province_id: int) -> int:
+	return _province_controller_id(province_id)
+
+
+func _display_color_for_province(province_id: int) -> Color:
+	if _political_palette_image == null:
+		return Color.BLACK
+	var pixel := _palette_position(province_id)
+	var color := _political_palette_image.get_pixel(pixel.x, pixel.y)
+	return Color(color.r, color.g, color.b, 1.0)
+
+
+func _is_front_province(province_id: int) -> bool:
+	if _front_palette_image == null:
+		return false
+	var pixel := _palette_position(province_id)
+	return _front_palette_image.get_pixel(pixel.x, pixel.y).r > 0.5
+
+
+func _on_province_control_changed(
+	_province_id: int,
+	_old_controller_id: int,
+	_new_controller_id: int
+) -> void:
+	_refresh_map_overlays()
+
+
+func _on_fronts_changed(_war_id: StringName) -> void:
+	_rebuild_front_palette()
+
+
+func _on_war_state_changed(_war_id: StringName) -> void:
+	_rebuild_front_palette()

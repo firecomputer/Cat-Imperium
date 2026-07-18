@@ -4,8 +4,17 @@
   "player_country_code": "KOR",
   "tax_parameters": {
     "civilian_factory_tax_value": 100.0,
-    "consumption_tax_alpha": 0.1,
-    "property_tax_alpha": 0.01
+    "consumption_tax_alpha": 5.0,
+    "property_tax_alpha": 0.005
+  },
+  "gdp_parameters": {
+    "output_elasticity": 0.25,
+    "max_annual_change": 0.12,
+    "short_window_weeks": 12,
+    "long_window_weeks": 52
+  },
+  "trade_parameters": {
+    "dollars_per_factory": 100.0
   },
   "items": [
     {"id":"feed","display_name":"사료","kind":"essential","base_price":10,"demand_per_index":0.80,"standard_of_living_weight":1.5},

@@ -2,9 +2,9 @@ extends SceneTree
 
 const CHECKPOINT_TURNS: Array[int] = [1, 15, 100]
 const EXPECTED_CHECKPOINT_HASHES := {
-	1: "4a9de63e828ba9beeae2e9bd5f704e99069d63fdc906d12d4cfd93e9758df04c",
-	15: "6f62e6edef98f7c8c3b67137374fc9e7a5bb130525c96a1e25a69f51109d614f",
-	100: "895e62bf24990c25474e1209154ad74c00320630fbcf617813379402dcc71b94",
+	1: "a60e5ec192937ac5b77e24ed7dcf9b0381d142fce33dfd5ef41fd805c49a2161",
+	15: "e0eff9db9c562ab54ec2384a4e69b1c374d47d32b61549baad581b5c62710ed0",
+	100: "3f27c31f3185bbba1d7e54c977903dd2dc59d830e2545cf714fca387af978a4f",
 }
 
 var _events: Array[Dictionary] = []

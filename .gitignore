@@ -1,0 +1,16 @@
+# Godot 4+ specific ignores
+.godot/
+/android/
+__pycache__/
+*.py[cod]
+# Added by code-review-graph
+.code-review-graph/
+
+# Raw map source geodata (~200MB). See PROVINCE_MAP.md for download sources.
+# The generated data/province_map.{png,json} stay tracked.
+/Beck_KG_V1/
+/ne_10m_admin_0_countries/
+/ne_10m_glaciated_areas/
+/ne_10m_lakes/
+/ne_10m_land/
+/ne_10m_ocean/

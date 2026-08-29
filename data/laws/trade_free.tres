@@ -1,0 +1,17 @@
+[gd_resource type="Resource" script_class="Law" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://sim/model/law.gd" id="1_law"]
+
+[resource]
+script = ExtResource("1_law")
+id = "trade_free"
+category = "trade"
+severity = -0.5
+modifiers = {
+"immediate_income": -0.2,
+"long_term_growth": 0.6,
+"productivity": 0.08,
+"stability": -0.15,
+"tax_rate": -0.02,
+"trade": 0.35
+}

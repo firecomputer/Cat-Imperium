@@ -1,0 +1,17 @@
+[gd_resource type="Resource" script_class="Law" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://sim/model/law.gd" id="1_law"]
+
+[resource]
+script = ExtResource("1_law")
+id = "occupation_pillage"
+category = "occupation"
+severity = 0.9
+modifiers = {
+"admin_cost": -0.05,
+"immediate_income": 1.0,
+"long_term_growth": -0.8,
+"productivity": -0.12,
+"stability": -0.6,
+"unrest": 0.12
+}

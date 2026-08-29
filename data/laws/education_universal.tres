@@ -1,0 +1,16 @@
+[gd_resource type="Resource" script_class="Law" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://sim/model/law.gd" id="1_law"]
+
+[resource]
+script = ExtResource("1_law")
+id = "education_universal"
+category = "education"
+severity = -0.4
+modifiers = {
+"admin_cost": 0.15,
+"education": 0.5,
+"immediate_income": -0.45,
+"long_term_growth": 0.7,
+"stability": 0.15
+}

@@ -1,0 +1,18 @@
+[gd_resource type="Resource" script_class="Law" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://sim/model/law.gd" id="1_law"]
+
+[resource]
+script = ExtResource("1_law")
+id = "status_meritocracy"
+category = "status"
+severity = -0.3
+modifiers = {
+"education": 0.3,
+"immediate_income": -0.1,
+"long_term_growth": 0.55,
+"merit": 1.0,
+"productivity": 0.04,
+"stability": -0.25,
+"unrest": 0.04
+}

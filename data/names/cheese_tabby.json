@@ -1,0 +1,27 @@
+{
+  "order": "given_family",
+  "separator": " ",
+  "family": [
+    "Beaumont", "Bernard", "Blanchard", "Chevalier", "Dubois", "Dufour",
+    "Fournier", "Garnier", "Girard", "Lambert", "Laurent", "Leclerc",
+    "Lefèvre", "Marchand", "Mercier", "Moreau", "Perrin", "Renard",
+    "Rousseau", "Vidal"
+  ],
+  "given": [
+    "Adèle", "Amélie", "Bastien", "Camille", "Céleste", "Chloé", "Éloi",
+    "Émile", "Étienne", "Fleur", "Gaspard", "Hugo", "Inès", "Jules", "Léon",
+    "Lucien", "Manon", "Marcel", "Margot", "Noémie", "Océane", "Rémi",
+    "Solène", "Théo"
+  ],
+  "nation_separator": " ",
+  "nation_stems": [
+    "Argenteuil", "Beauvais", "Belfort", "Chandreux", "Foulaine", "Marnac",
+    "Montclair", "Ormont", "Rochefort", "Sancerre", "Valcourt", "Verdier"
+  ],
+  "nation_titles": [
+    "공국", "왕국", "백작령", "연맹", "자유령"
+  ],
+  "rebel_titles": [
+    "봉기군", "해방전선", "자유령", "혁명군", "코뮌"
+  ]
+}

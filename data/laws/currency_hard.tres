@@ -1,0 +1,16 @@
+[gd_resource type="Resource" script_class="Law" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://sim/model/law.gd" id="1_law"]
+
+[resource]
+script = ExtResource("1_law")
+id = "currency_hard"
+category = "currency"
+severity = -0.5
+modifiers = {
+"borrowing_capacity": -0.2,
+"immediate_income": -0.25,
+"inflation_pressure": -0.03,
+"long_term_growth": 0.2,
+"stability": 0.45
+}

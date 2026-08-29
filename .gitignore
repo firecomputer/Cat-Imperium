@@ -14,3 +14,5 @@ __pycache__/
 /ne_10m_lakes/
 /ne_10m_land/
 /ne_10m_ocean/
+out/
+.venv/

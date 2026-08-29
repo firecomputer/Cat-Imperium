@@ -1,0 +1,27 @@
+{
+  "order": "given_family",
+  "separator": " ",
+  "family": [
+    "Antonov", "Belov", "Bogdanov", "Fedorov", "Gromov", "Ivanov", "Karpov",
+    "Kuznetsov", "Lebedev", "Morozov", "Nikitin", "Orlov", "Petrov",
+    "Romanov", "Sokolov", "Tarasov", "Vasiliev", "Vinogradov", "Volkov",
+    "Zaitsev"
+  ],
+  "given": [
+    "Aleksandr", "Alyona", "Anastasia", "Boris", "Daria", "Dmitri", "Elena",
+    "Galina", "Irina", "Ivan", "Katya", "Kirill", "Lev", "Mikhail", "Nadia",
+    "Nikolai", "Oleg", "Pavel", "Sasha", "Sergei", "Svetlana", "Tatiana",
+    "Vera", "Yuri"
+  ],
+  "nation_separator": " ",
+  "nation_stems": [
+    "Belgorod", "Chernomor", "Dolinsk", "Gravensk", "Irkholm", "Kamenka",
+    "Novgrad", "Ostrov", "Petrovsk", "Severny", "Volkhov", "Zarechny"
+  ],
+  "nation_titles": [
+    "공국", "차르국", "연방", "요새령", "대공국"
+  ],
+  "rebel_titles": [
+    "봉기군", "인민군", "적위대", "해방전선", "농민군"
+  ]
+}

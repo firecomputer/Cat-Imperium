@@ -1,0 +1,16 @@
+[gd_resource type="Resource" script_class="Law" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://sim/model/law.gd" id="1_law"]
+
+[resource]
+script = ExtResource("1_law")
+id = "conscription_militia"
+category = "conscription"
+severity = 0.0
+modifiers = {
+"army_morale": -0.03,
+"immediate_income": 0.15,
+"long_term_growth": 0.0,
+"manpower": 0.05,
+"stability": 0.18
+}

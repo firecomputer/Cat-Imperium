@@ -1,0 +1,18 @@
+[gd_resource type="Resource" script_class="Law" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://sim/model/law.gd" id="1_law"]
+
+[resource]
+script = ExtResource("1_law")
+id = "trade_embargo"
+category = "trade"
+severity = 0.8
+modifiers = {
+"immediate_income": 0.15,
+"inflation_pressure": 0.02,
+"long_term_growth": -0.65,
+"productivity": -0.12,
+"stability": 0.25,
+"trade": -0.45,
+"unrest": 0.03
+}

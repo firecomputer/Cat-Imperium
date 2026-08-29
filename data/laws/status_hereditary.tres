@@ -1,0 +1,18 @@
+[gd_resource type="Resource" script_class="Law" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://sim/model/law.gd" id="1_law"]
+
+[resource]
+script = ExtResource("1_law")
+id = "status_hereditary"
+category = "status"
+severity = 0.4
+modifiers = {
+"education": -0.25,
+"immediate_income": 0.15,
+"long_term_growth": -0.45,
+"merit": -1.0,
+"productivity": -0.03,
+"stability": 0.55,
+"unrest": -0.04
+}

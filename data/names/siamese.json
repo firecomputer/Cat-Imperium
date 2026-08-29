@@ -1,0 +1,27 @@
+{
+  "order": "given_family",
+  "separator": " ",
+  "family": [
+    "Anurak", "Boonmee", "Chaiyasit", "Intarawong", "Jantarat", "Kanchana",
+    "Kittisak", "Lertchai", "Maneerat", "Nimman", "Phromdee", "Rattanakul",
+    "Saelim", "Sirikul", "Srisai", "Suwan", "Thamrong", "Vejjajiva",
+    "Wattanapan", "Yindee"
+  ],
+  "given": [
+    "Anan", "Arun", "Chai", "Channarong", "Kiet", "Kitt", "Mali", "Niran",
+    "Pailin", "Pim", "Prasert", "Prem", "Rin", "Sakda", "Somchai", "Suda",
+    "Surin", "Tawan", "Thana", "Virote", "Waan", "Ying"
+  ],
+  "nation_separator": " ",
+  "nation_stems": [
+    "Ayutthara", "Bangnara", "Chandapuri", "Doiwara", "Kanchanapura",
+    "Lamphun", "Nakhonrat", "Phraya", "Rattanak", "Sukhothara", "Thonburin",
+    "Uthaithani"
+  ],
+  "nation_titles": [
+    "왕국", "번왕국", "공국", "연합왕국", "도시국가"
+  ],
+  "rebel_titles": [
+    "봉기군", "해방군", "독립군", "자유동맹", "저항군"
+  ]
+}

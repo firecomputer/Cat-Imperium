@@ -1,6 +1,6 @@
-# Cat Empire — 2차 계획서 (v0.2 확정본)
+# Cat Imperium — 2차 계획서 (v0.2 확정본)
 
-> **전제 문서**: `CAT_EMPIRE_DESIGN.md`(v0.1), `PHASE1_REPORT.md`,
+> **전제 문서**: `CAT_IMPERIUM_DESIGN.md`(v0.1), `PHASE1_REPORT.md`,
 > `TUNING_M8/M8_5/M9/M10`, **`TUNING_M11.md`, `TUNING_M12.md`**
 > **이 문서의 성격**: 1차가 "시스템을 만든다" 였다면 2차는 **"세계에 서사를 세우고, 그
 > 서사에 값을 매긴다"** 이다. 1차와 달리 이 문서는 **분기(gate)를 가진다** — M11의

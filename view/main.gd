@@ -186,7 +186,7 @@ func _build_top_bar() -> Control:
 	row.add_theme_constant_override("separation", 6)
 	margin.add_child(row)
 
-	var brand := _label("CAT EMPIRE", 21, ACCENT)
+	var brand := _label("CAT IMPERIUM", 21, ACCENT)
 	brand.tooltip_text = "결정론적 고양이 문명 관전 시뮬레이션"
 	row.add_child(brand)
 	row.add_child(_v_separator())

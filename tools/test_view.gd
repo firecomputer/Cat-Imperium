@@ -9,7 +9,7 @@ var main: Control
 
 func _initialize() -> void:
 	# M13 기본값은 EarthMapSource 이지만 1차 UI 회귀는 기존 노이즈 지형에 고정한다.
-	OS.set_environment("CAT_EMPIRE_MAP_SOURCE", "noise")
+	OS.set_environment("CAT_IMPERIUM_MAP_SOURCE", "noise")
 	main = load("res://Main.tscn").instantiate()
 	root.add_child(main)
 	call_deferred("_run")

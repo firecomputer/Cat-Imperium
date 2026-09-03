@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bake Natural Earth + ETOPO into Cat Empire's fixed 440x200 earth map.
+"""Bake Natural Earth + ETOPO into Cat Imperium's fixed 440x200 earth map.
 
 Runtime code reads only data/world/earth_map.bin. Raw source datasets stay out
 of the repository; their download locations and exact local-file checksums are

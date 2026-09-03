@@ -17,7 +17,7 @@ TESTS=(test_laws test_law_hints test_credit test_characters test_military
 
 failed=0
 for t in "${TESTS[@]}"; do
-	out=$(timeout 600 godot --headless --log-file "/tmp/cat-empire-$t.log" \
+	out=$(timeout 600 godot --headless --log-file "/tmp/cat-imperium-$t.log" \
 		--script "res://tools/$t.gd" 2>&1)
 	code=$?
 	errors=$(printf '%s\n' "$out" | grep -c 'SCRIPT ERROR')

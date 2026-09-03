@@ -17,7 +17,7 @@ static var _neighbor_caches: Dictionary = {}
 
 
 static func default_kind() -> int:
-	var configured := OS.get_environment("CAT_EMPIRE_MAP_SOURCE").to_lower()
+	var configured := OS.get_environment("CAT_IMPERIUM_MAP_SOURCE").to_lower()
 	return Kind.NOISE if configured == "noise" else Kind.EARTH
 
 

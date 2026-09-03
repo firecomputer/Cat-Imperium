@@ -7,7 +7,12 @@ class_name WarAI extends RefCounted
 ##   2. 전투는 한 턴에 끝나지 않는다 — 매 턴 12%씩 깎이고 사기가 무너져야 물러난다.
 ##   3. 방어 측이 유리하다 — 지형·요새·주둔이 수비에 곱해진다. 공격은 비싸야 한다.
 
-const MAX_ARMIES := 4                     # 국가당 야전군 상한
+## 야전군 상한은 국토 크기가 정한다 (M14 §2). 고정 4 는 소국과 대제국에 같은
+## 편성 폭을 줬고, 병력 총량이 GDP 에 비례하므로 큰 나라가 전선마다 더 두꺼운
+## 군대를 세우는 일방적 이점이 됐다. 이제 영토가 늘면 관리 단위가 흩어진다.
+const ARMY_CAP_PER_PROVINCE := 4
+const ARMY_CAP_MIN := 2
+const ARMY_CAP_MAX := 8
 const MIN_ARMY_TROOPS := 200              # 이보다 작게는 쪼개지 않는다
 const RETREAT_MORALE := 0.35
 const RETREAT_TROOP_RATIO := 0.35         # 최대 병력 대비 이 아래면 퇴각
@@ -16,6 +21,22 @@ const STARVE_SUPPLY := 0.15               # 이 아래로 굶으면 목표를 �
 const LANDING_MORALE := 0.85              # 상륙 직후 사기 배율. 바다를 건너는 건 공짜가 아니다
 ## 바다 한 칸은 승선 1턴 + 상륙 1턴이다. 경로 비교에서 육로 두 칸과 같은 값을 쓴다.
 const SEA_HOPS := 2.0
+## 적 야전군이 서 있는 전선을 홉 환산으로 이만큼 당겨온다. 빈 적지를 밟는 것보다
+## 적 부대를 잡는 것이 먼저다 — 이게 없으면 양쪽 군대가 서로를 지나쳐 영토만
+## 맞바꾼다 (실측: 내 땅에 앉은 적군의 83% 가 아무도 안 붙은 채 공성했다).
+const ENEMY_ARMY_PRIORITY := 3.0
+## 이미 다른 아군이 맡은 전선에 붙는 비용. 빈 땅은 사실상 금지(각자 다른 전선),
+## 적 부대가 있는 곳은 싸게 매겨 협격을 허용한다.
+const DUP_FRONT_PENALTY := 100.0
+const DUP_STACK_PENALTY := 2.0
+## 전선 진입 문턱. 이만한 전력이 안 되면 적 칸에 발을 들이지 않고 앞에서 기다린다.
+## 턴이 이산이라 한 번 붙으면 이동도 공성도 그 자리에서 멈춘다 — 지는 나라가
+## 매 턴 소부대를 뽑아 던지면 사단 하나가 몇 턴씩 묶였다 (실측: 교전 군대-턴의
+## 39% 가 "압도적 우세인데 소부대에 묶임", 45% 가 절망적 열세의 돌격이었다).
+const ENGAGE_MIN_POWER_RATIO := 0.6
+## 같은 칸에서 벌어지는 교전은 이동보다 먼저 해결한다. 아주 작은 잔병은 대군의
+## 행군까지 묶지 못하게 하되, 이 값은 공성 진행 여부에는 사용하지 않는다.
+const PIN_MIN_TROOP_RATIO := 0.25
 
 const TERRAIN_DEFENSE := {
 	Province.Terrain.PLAIN: 1.0,
@@ -25,7 +46,7 @@ const TERRAIN_DEFENSE := {
 const INFRA_DEFENSE := 0.04               # 인프라 1 당 방어력 +4% (요새 대용)
 const CITY_DEFENSE := 1.25
 
-const SIEGE_BASE := 22.0                  # 진행도 100 에서 점령 성립
+const SIEGE_BASE := 30.0                  # 진행도 100 에서 점령 성립
 const SIEGE_INFRA_RESIST := 0.35
 const SIEGE_CITY_RESIST := 2.0
 const SIEGE_TROOP_NORM := 0.01            # 인구의 1% 병력이면 표준 속도
@@ -42,26 +63,55 @@ const GARRISON_NEED_CITY := 0.15
 ## 군사력의 기회비용이다 — 전쟁이 나면 대부분 전선으로 빠져나간다.
 const GARRISON_ARMY_SHARE_PEACE := 0.25
 const GARRISON_ARMY_SHARE_WAR := 0.08
-## 야전군 상한(MAX_ARMIES)과 별개다. 치안 분견대는 전선에 서지 않는다.
+## 야전군 상한(army_cap)과 별개다. 치안 분견대는 전선에 서지 않는다.
 const GARRISON_MAX_DETACHMENTS := 6
 ## 분견대 최소 크기. MIN_ARMY_TROOPS(200) 는 야전군 분할 기준이라 여기 쓰면
 ## 중앙값 국가(총병력 139)는 분견대를 하나도 못 만든다. 부분 주둔도 허용해야
 ## 한다 — 하한이 20 이면 치안 목표가 있는 국가-턴의 76% 가 예산 부족으로 탈락했다.
 const GARRISON_MIN_TROOPS := 5
 
+# ---------------------------------------------------------------- 진압 의지 (M14 §5)
+## 분리주의가 내각의 진압 의지를 넘어선 만큼이 정치적 마찰이 된다.
+const GARRISON_RELUCTANCE := 0.5
+const FRONT_RELUCTANCE := 4.0
+
+
+## 국토가 클수록 전선을 더 많이 벌릴 수 있지만, 선형이 아니다.
+static func army_cap(n: Nation) -> int:
+	return clampi(n.provinces.size() / ARMY_CAP_PER_PROVINCE, ARMY_CAP_MIN, ARMY_CAP_MAX)
+
+
+## 진압을 꺼리는 정도. 0 이면 망설임 없이 군대를 보낸다.
+static func suppression_reluctance(p: Province, n: Nation) -> float:
+	return maxf(p.separatism - n.suppression_will, 0.0)
+
 
 static func plan(world: WorldState) -> void:
 	world.rebuild_army_index()
+	var occupied := _occupied_index(world)
 	for n in world.nations:
 		if not n.is_alive:
 			continue
 		# §2.7 전선 → 치안 예산 → 주둔 순. 치안 때문에 전선이 붕괴하면 안 된다.
 		_resolve_landings(world, n)
-		var fronts := _fronts(world, n)
+		var fronts := _fronts(world, n, occupied)
 		_organize(world, n, fronts.size())
 		_assign_targets(world, n, fronts)
 		_garrison(world, n)
 		_move(world, n)
+
+
+## 점령지 색인 (점령국 id -> 프로빈스). 국가마다 전 프로빈스를 훑으면
+## 턴당 O(국가 × 프로빈스) 가 되므로 턴에 한 번만 만든다.
+static func _occupied_index(world: WorldState) -> Dictionary:
+	var out := {}
+	for p in world.provinces:
+		if p.occupied_by_nation < 0:
+			continue
+		if not out.has(p.occupied_by_nation):
+			out[p.occupied_by_nation] = [] as Array[int]
+		out[p.occupied_by_nation].append(p.id)
+	return out
 
 
 ## 방어 배율. 프로빈스를 지배 중인 쪽에만 붙는다.
@@ -77,19 +127,37 @@ static func defense_mult(p: Province) -> float:
 
 ## 전선 = 지금 칠 수 있는 적 프로빈스. 내 영토에 인접한 적지와,
 ## 빼앗겨서 되찾아야 할 내 땅이 전부 여기 들어간다.
-static func _fronts(world: WorldState, n: Nation) -> Array[int]:
+## 점령지도 내 땅처럼 전선을 뻗는다. 소유 프로빈스에서만 전선을 그리면 국경
+## 한 줄을 먹은 뒤 그 너머가 목표에서 사라지고, 야전군은 갈 곳이 없어 수도로
+## 돌아간다 — 그 사이 적이 새 군대를 뽑아 걸어 들어와 도로 가져갔다 (실측:
+## 점령지에 인접한 적지의 54.8% 가 전선으로 잡히지 않았다).
+static func _fronts(world: WorldState, n: Nation,
+		occupied: Dictionary = {}) -> Array[int]:
 	var out: Array[int] = []
 	if not n.at_war:
 		return out
 	var seen := {}
-	for pid in n.provinces:
+	var held: Array = n.provinces
+	var mine: Array = occupied.get(n.id, [])
+	if mine.is_empty() and occupied.is_empty():
+		mine = _occupied_index(world).get(n.id, [])
+	if not mine.is_empty():
+		held = n.provinces.duplicate()
+		held.append_array(mine)
+	for pid: int in held:
 		var p: Province = world.provinces[pid]
-		if p.occupied_by_nation >= 0 and not seen.has(pid):
+		if p.owner_nation == n.id and p.occupied_by_nation >= 0 and not seen.has(pid):
 			seen[pid] = true
 			out.append(pid)                      # 빼앗긴 내 땅부터 되찾는다
 			continue
 		if p.controller() != n.id:
 			continue
+		# 내 땅에 들어와 앉은 적 야전군도 전선이다. 공성이 100 에 닿기 전에는
+		# occupied_by_nation 이 비어 있어 예전 규칙으로는 목표가 되지 못했고,
+		# 야전군은 침입자를 지나쳐 빈 적지로 행군했다.
+		if not seen.has(pid) and _hostile_army_at(world, n.id, pid):
+			seen[pid] = true
+			out.append(pid)
 		for nb: int in p.land_neighbors:
 			var q: Province = world.provinces[nb]
 			var holder := q.controller()
@@ -111,6 +179,18 @@ static func _fronts(world: WorldState, n: Nation) -> Array[int]:
 				if Diplomacy.are_at_war(world, n.id, owner):
 					seen[landing] = true
 					out.append(landing)
+	# 적진 깊숙이 들어간 아군 옆의 적 야전군. 본토에 접한 칸만 전선으로 세우면
+	# 국경에서 밀려난 적은 한 칸 물러나는 것만으로 추격을 벗어난다 — 회복해서
+	# 다시 나오는 일이 반복되어 전쟁이 소모전으로만 끝난다.
+	for a in _field_armies(world, n):
+		if a.province_id < 0:
+			continue
+		for nb: int in world.provinces[a.province_id].land_neighbors:
+			if seen.has(nb) or not _passable(world, n, nb):
+				continue
+			if _hostile_army_at(world, n.id, nb):
+				seen[nb] = true
+				out.append(nb)
 	out.sort()                                    # 결정론 (§15)
 	return out
 
@@ -124,12 +204,17 @@ static func _organize(world: WorldState, n: Nation, front_count: int) -> void:
 		total += a.troops
 	if total <= 0:
 		return
-	var want := clampi(maxi(front_count, 1), 1, MAX_ARMIES)
+	var want := clampi(maxi(front_count, 1), 1, army_cap(n))
 	want = mini(want, maxi(total / MIN_ARMY_TROOPS, 1))
 
 	while alive.size() > want:
 		_merge_smallest(world, alive)
 	while alive.size() < want:
+		# 편성은 한 턴에 하나씩이다 (M14 §3). 예산은 Military.plan_spending 이
+		# 지지도에 비례해 적립한다 — 지지도 0 인 나라는 5턴에 한 번만 쪼갠다.
+		# 병합에는 비용을 물리지 않는다. 전선이 사라진 군대는 언제든 합쳐야 한다.
+		if n.spawn_credit < 1.0:
+			break
 		var biggest := _biggest(alive)
 		if biggest.troops < MIN_ARMY_TROOPS * 2:
 			break
@@ -139,6 +224,7 @@ static func _organize(world: WorldState, n: Nation, front_count: int) -> void:
 		fresh.morale = biggest.morale
 		fresh.tech_level = biggest.tech_level
 		alive.append(fresh)
+		n.spawn_credit -= 1.0
 
 	# 같은 프로빈스에 겹친 군대는 합친다. 잘게 쪼개진 군대는 각개격파당한다.
 	var by_province := {}
@@ -154,7 +240,10 @@ static func _assign_targets(world: WorldState, n: Nation, fronts: Array[int]) ->
 	armies.sort_custom(func(a: Army, b: Army) -> bool: return a.id < b.id)
 	if fronts.is_empty():
 		for a in armies:
-			a.target_province = n.capital
+			# 점령지를 비우면 적이 새로 뽑은 군대로 걸어 들어와 도로 가져간다.
+			# 칠 곳이 없으면 지금 쥔 땅에 그대로 선다.
+			a.target_province = a.province_id if _holds_ground(world, n, a) \
+				else n.capital
 		return
 
 	var taken := {}
@@ -168,27 +257,43 @@ static func _assign_targets(world: WorldState, n: Nation, fronts: Array[int]) ->
 		# 포위 중이면 끝까지 앉아 있는다. 목표를 갈아타면 공성이 영원히 안 끝난다.
 		if _is_besieging(world, a):
 			a.target_province = a.province_id
-			taken[a.province_id] = true
+			taken[a.province_id] = int(taken.get(a.province_id, 0)) + 1
 			continue
 		var best := -1
 		var best_cost := INF
 		for f in fronts:
 			var cost := _hops(world, n, a.province_id, f)
+			cost += suppression_reluctance(world.provinces[f], n) * FRONT_RELUCTANCE
+			var manned := _hostile_army_at(world, n.id, f)
+			if manned:
+				cost -= ENEMY_ARMY_PRIORITY
 			if taken.has(f):
-				cost += 100.0                 # 이미 다른 군대가 맡은 전선은 후순위
+				# 빈 전선은 나눠 맡고, 적 부대가 선 전선에는 겹쳐 붙는다.
+				cost += (DUP_STACK_PENALTY * int(taken[f])) if manned \
+					else DUP_FRONT_PENALTY
 			if cost < best_cost:
 				best_cost = cost
 				best = f
 		a.target_province = best if best >= 0 else n.capital
-		taken[a.target_province] = true
+		taken[a.target_province] = int(taken.get(a.target_province, 0)) + 1
+
+
+## 지금 서 있는 칸을 이 나라가 쥐고 있는가 (자국 영토든 점령지든).
+static func _holds_ground(world: WorldState, n: Nation, army: Army) -> bool:
+	if army.province_id < 0:
+		return false
+	return world.provinces[army.province_id].controller() == n.id
 
 
 ## 치안 수요 (§2.3). unrest 가 지배항이고 나머지는 이미 설계된 위험 특성이다.
-static func garrison_need(p: Province) -> float:
+static func garrison_need(p: Province, n: Nation) -> float:
 	var score := p.unrest
 	score += GARRISON_NEED_EXCLAVE if p.is_exclave else 0.0
 	score += minf(p.distance_from_capital * GARRISON_NEED_DISTANCE, GARRISON_NEED_DISTANCE_CAP)
 	score += GARRISON_NEED_CITY if p.has_city else 0.0
+	# 비둘기 내각은 분리주의가 끓는 땅을 눌러 앉히기를 꺼린다. GARRISON_NEED_MIN
+	# 아래로 떨어지면 후보에서 아예 빠져 그 땅은 주둔 없이 방치된다.
+	score -= suppression_reluctance(p, n) * GARRISON_RELUCTANCE
 	return maxf(score, 0.0)
 
 
@@ -199,7 +304,7 @@ static func garrison_targets(world: WorldState, n: Nation) -> Array[int]:
 		var p: Province = world.provinces[pid]
 		if p.controller() != n.id:
 			continue
-		var need := garrison_need(p)
+		var need := garrison_need(p, n)
 		if need < GARRISON_NEED_MIN:
 			continue
 		scored.append({"pid": pid, "need": need, "unrest": p.unrest})
@@ -333,9 +438,17 @@ static func _move(world: WorldState, n: Nation) -> void:
 			a.retreating = false
 		if a.province_id == a.target_province or a.target_province < 0:
 			continue
-		if _has_hostile(world, a):
+		if _pinned_by_hostile(world, a):
+			# 이길 수 없는 싸움에서는 빠진다. 이산 턴에서는 한 번 붙으면 이동도
+			# 공성도 그 자리에서 멈추므로, 열세 부대가 버티면 제 병력만 갈리면서
+			# 적을 묶어 두는 소모품이 된다 (실측: 압도적 우세군이 중앙값 14명짜리
+			# 부대에 붙잡힌 것이 교전 군대-턴의 37%).
+			if a.garrison_province < 0 and _outgunned(world, a):
+				_withdraw(world, n, a)
 			continue                          # 교전 중에는 이동하지 않는다
 		var step := _next_step(world, n, a.province_id, a.target_province)
+		if step >= 0 and not _can_engage(world, a, step):
+			continue                          # 전력이 모일 때까지 전선 앞에서 기다린다
 		if step >= 0 and _is_sea_step(world, a.province_id, step):
 			_embark(world, n, a, step)
 			continue
@@ -347,6 +460,32 @@ static func _move(world: WorldState, n: Nation) -> void:
 			continue
 		world.move_army_index(a.id, a.province_id, step)
 		a.province_id = step
+
+
+## 전력이 모일 때까지 뒤로 뺀다. 적이 없고 내가 쥔 인접 칸 중 수도에 가까운
+## 쪽으로 한 칸 물러난다. 갈 곳이 없으면 그 자리에서 싸운다.
+static func _withdraw(world: WorldState, n: Nation, army: Army) -> void:
+	var best := -1
+	var best_cost := INF
+	for nb: int in world.provinces[army.province_id].land_neighbors:
+		if world.provinces[nb].controller() != n.id:
+			continue
+		if _hostile_army_at(world, n.id, nb):
+			continue
+		var cost := _hops(world, n, nb, n.capital)
+		if cost < best_cost:
+			best_cost = cost
+			best = nb
+	if best < 0:
+		return
+	world.move_army_index(army.id, army.province_id, best)
+	army.province_id = best
+	world.log_event("army_withdrew", {
+		"nation": n.id,
+		"army": army.id,
+		"to": best,
+		"troops": army.troops,
+	})
 
 
 ## 승선. 한 턴을 바다에서 보내고 다음 턴에 내린다 — 그 사이 제해권을 잃으면 격침이다.
@@ -421,9 +560,7 @@ static func _sink(world: WorldState, army: Army, zone: int) -> void:
 	})
 	army.at_sea_zone = -1
 	army.landing_target = -1
-	army.troops = 0
-	army.is_alive = false
-	Military.release_general(world, army)
+	Military.destroy_army(world, army, "convoy_sunk")
 
 
 ## 자국·점령지·교전국 영토를 통과할 수 있다. 중립국 영토는 못 지나간다.
@@ -557,9 +694,7 @@ static func _intern(world: WorldState, army: Army) -> void:
 		"province": army.province_id,
 		"troops": army.troops,
 	})
-	army.troops = 0
-	army.is_alive = false
-	Military.release_general(world, army)
+	Military.destroy_army(world, army, "interned")
 
 
 static func _is_besieging(world: WorldState, army: Army) -> bool:
@@ -571,15 +706,54 @@ static func _is_besieging(world: WorldState, army: Army) -> bool:
 		return false
 	if not Diplomacy.are_at_war(world, army.nation_id, holder):
 		return false
-	return not _has_hostile(world, army)
+	return true
+
+
+## 다음 칸에 발을 들일 만한 전력인가. 방어 배율은 그 칸을 지배하는 쪽에 붙는다.
+static func _can_engage(world: WorldState, army: Army, pid: int) -> bool:
+	var p: Province = world.provinces[pid]
+	var enemy := 0.0
+	for other_id: int in world.armies_at(pid):
+		var other: Army = world.armies[other_id]
+		if not other.is_alive:
+			continue
+		if not Diplomacy.are_at_war(world, army.nation_id, other.nation_id):
+			continue
+		var mult := defense_mult(p) if p.controller() == other.nation_id else 1.0
+		enemy += Military.combat_power(world, other) * mult
+	if enemy <= 0.0:
+		return true
+	return Military.combat_power(world, army) >= enemy * ENGAGE_MIN_POWER_RATIO
+
+
+## 지금 서 있는 칸에서 이길 가망이 없는가.
+static func _outgunned(world: WorldState, army: Army) -> bool:
+	return not _can_engage(world, army, army.province_id)
 
 
 static func _has_hostile(world: WorldState, army: Army) -> bool:
+	return _hostile_army_at(world, army.nation_id, army.province_id)
+
+
+## 이 부대를 그 자리에 묶어 둘 만한 적이 있는가. 존재만 보면 5명짜리 부대가
+## 사단 하나의 행군을 무한정 멈춘다. 그 아래는 스쳐 지나갈 수 있는 잔병이다.
+static func _pinned_by_hostile(world: WorldState, army: Army) -> bool:
+	var enemy := 0
 	for other_id: int in world.armies_at(army.province_id):
 		var other: Army = world.armies[other_id]
 		if not other.is_alive:
 			continue
 		if Diplomacy.are_at_war(world, army.nation_id, other.nation_id):
+			enemy += other.troops
+	return enemy > 0 and enemy >= int(army.troops * PIN_MIN_TROOP_RATIO)
+
+
+static func _hostile_army_at(world: WorldState, nation_id: int, pid: int) -> bool:
+	for other_id: int in world.armies_at(pid):
+		var other: Army = world.armies[other_id]
+		if not other.is_alive:
+			continue
+		if Diplomacy.are_at_war(world, nation_id, other.nation_id):
 			return true
 	return false
 
@@ -601,11 +775,13 @@ static func _merge_smallest(world: WorldState, armies: Array[Army]) -> void:
 	_absorb(world, _biggest(armies), small)
 
 
-## 병력과 사기를 인원 가중 평균으로 흡수한다.
+## 병력·사기·장비 품질을 인원 가중 평균으로 흡수한다.
 static func _absorb(world: WorldState, keep: Army, gone: Army) -> void:
 	var total := keep.troops + gone.troops
 	if total > 0:
 		keep.morale = (keep.morale * keep.troops + gone.morale * gone.troops) / float(total)
+		keep.tech_level = (keep.tech_level * keep.troops \
+			+ gone.tech_level * gone.troops) / float(total)
 	keep.troops = total
 	keep.peak_troops = maxi(keep.peak_troops, keep.troops)
 	gone.troops = 0

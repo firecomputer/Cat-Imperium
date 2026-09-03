@@ -22,6 +22,15 @@ var attacker_losses: float = 0.0
 var defender_losses: float = 0.0
 var occupied_value_attacker: float = 0.0  # 공격 진영이 점령 중인 적 프로빈스 가치
 var occupied_value_defender: float = 0.0
+## 이 전쟁에서 한 번이라도 점령당한 프로빈스 → 마지막 점령국. 조약 전리품이
+## 서명 순간의 점령 스냅샷에만 걸리면 전선이 시소를 타는 전쟁은 이겨도 빈손이다
+## (§P1). Military.occupy() 만 쓰고, 읽는 곳은 Peace.rank_demands 다.
+var occupied_ever: Dictionary = {}
+
+## 참전 시점의 프로빈스 목록 (Nation id -> PackedInt32Array). 전쟁은 국토가 실제로
+## 갈려 나가야 끝난다 — 개전 시 영토 중 지금 손을 떠난 비율을 종전 자격으로 쓴다
+## (Peace._consumed_ratio).
+var start_provinces: Dictionary = {}
 
 ## M8.5 반란전 전용. 반란전은 일반 warscore·강화 경로를 타지 않는다 (§3, §4).
 ## 모국은 항상 공격 진영이므로 손실은 attacker_losses / defender_losses 를 그대로 읽는다.

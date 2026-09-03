@@ -10,6 +10,10 @@ func _initialize() -> void:
 	var runs := int(args.get("runs", 100))
 	var seed0 := int(args.get("seed0", 1))
 	var out_path: String = args.get("out", "res://out/provinces.csv")
+	var source_kind := MapSource.parse_kind(args.get("map-source", "earth"))
+	if source_kind < 0:
+		quit(2)
+		return
 
 	var lines := PackedStringArray(["seed,provinces,min_size,max_size,mean_size,orphans,"
 		+ "double_assigned,island_comps,island_comps_ok,isthmus,strait"])
@@ -19,15 +23,22 @@ func _initialize() -> void:
 	var fail_island := 0
 	var count_sum := 0
 	var mean_sum := 0.0
+	var cap := ProvinceSplitter.MAX_TILES
 
 	for i in range(runs):
 		var s := seed0 + i
-		var map: Dictionary = MapGenerator.generate(s)
-		var nbr := MapGenerator.neighbor_cache()
-		var tagged := FeatureTagger.tag(map["land"], nbr)
+		var map: Dictionary = MapSource.create_map(s, source_kind)
+		var nbr := MapSource.neighbor_cache(map["width"], map["height"])
+		var tagged := FeatureTagger.tag(map["land"], nbr, map["forced_features"],
+			float(map.get("granularity", 1.0)))
+		# 프로빈스 통계에는 실제 해역 분할이 필요 없으므로 연결 분지 id 를 대신 쓴다.
+		tagged["country"] = map.get("country", PackedInt32Array())
+		tagged["sea_zone"] = tagged["sea_basin"]
 		var rng := RngPool.new(map["seed"]).get_rng("province_split")
-		var provinces := ProvinceSplitter.split(map["land"], map["elevation"], tagged, rng)
+		var provinces := ProvinceSplitter.split(map["land"], map["elevation"], tagged, rng,
+			map["width"], nbr)
 		var st := ProvinceStats.summarize(provinces, map["land"], tagged)
+		cap = int(st["max_tiles"])
 		var fc: Dictionary = st["feature_counts"]
 
 		lines.append(",".join(PackedStringArray([str(s), str(st["count"]), str(st["min_size"]),
@@ -54,7 +65,8 @@ func _initialize() -> void:
 	f.close()
 
 	print("runs=%d" % runs)
-	print("크기 1~30 위반          : %d" % fail_size)
+	print("map_source=%s" % MapSource.kind_name(source_kind))
+	print("크기 1~%d 위반          : %d" % [cap, fail_size])
 	print("고아/중복 타일 있는 시드 : %d" % fail_orphan)
 	print("섬이 독립 프로빈스 아님  : %d" % fail_island)
 	print("프로빈스 수 평균 %.1f, 타일 평균 %.1f" % [float(count_sum) / runs, mean_sum / runs])

@@ -7,15 +7,24 @@ enum Feature { INLAND, COAST, ISTHMUS, STRAIT, ISLAND }
 const ISLAND_MAX_TILES := 30
 
 
+## 격자 해상도가 올라가면 같은 실제 크기의 섬이 더 많은 타일을 차지한다.
+## granularity 는 MapSource 가 주는 타일 크기 배율이다 (noise 1.0, earth 1.74).
+static func island_max_tiles(granularity: float) -> int:
+	return int(round(ISLAND_MAX_TILES * granularity))
+
+
 ## 반환: {
 ##   "features": PackedInt32Array,      타일별 Feature
 ##   "land_comp": PackedInt32Array,     육지 컴포넌트 id (바다 -1)
 ##   "sea_basin": PackedInt32Array,     바다 분지 id (육지 -1)
 ##   "comp_sizes": Dictionary,          컴포넌트 id → 타일 수
+##   "granularity": float,              뒤 단계(분할·통계)가 같은 배율을 쓰도록 실어 보낸다
 ## }
-static func tag(land: PackedByteArray, nbr: Array) -> Dictionary:
+static func tag(land: PackedByteArray, nbr: Array,
+		forced_features: PackedByteArray = PackedByteArray(),
+		granularity: float = 1.0) -> Dictionary:
 	var total := land.size()
-	var land_comp := MapGenerator.land_components(land, nbr)
+	var land_comp := MapSource.land_components(land, nbr)
 	var sea_basin := _sea_basins(land, nbr)
 
 	var comp_sizes: Dictionary = {}
@@ -25,28 +34,33 @@ static func tag(land: PackedByteArray, nbr: Array) -> Dictionary:
 			comp_sizes[c] = int(comp_sizes.get(c, 0)) + 1
 
 	var isthmus := _isthmuses(land, nbr, land_comp)
+	var island_max := island_max_tiles(granularity)
 
 	var features := PackedInt32Array()
 	features.resize(total)
 	for idx in range(total):
-		features[idx] = _classify(idx, land, nbr, land_comp, comp_sizes, isthmus)
+		features[idx] = _classify(idx, land, nbr, land_comp, comp_sizes, isthmus, island_max)
+		if forced_features.size() == total \
+				and forced_features[idx] != MapSource.NO_FORCED_FEATURE:
+			features[idx] = forced_features[idx]
 
 	return {
 		"features": features,
 		"land_comp": land_comp,
 		"sea_basin": sea_basin,
 		"comp_sizes": comp_sizes,
+		"granularity": granularity,
 	}
 
 
 static func _classify(idx: int, land: PackedByteArray, nbr: Array, land_comp: PackedInt32Array,
-		comp_sizes: Dictionary, isthmus: Dictionary) -> int:
+		comp_sizes: Dictionary, isthmus: Dictionary, island_max: int) -> int:
 	# 열린 바다는 별도 enum 값이 없어 INLAND 로 둔다 (문서 enum 준수).
 	if land[idx] == 0:
-		return Feature.STRAIT if _is_strait(idx, land, nbr, land_comp, comp_sizes) else Feature.INLAND
+		return Feature.STRAIT if _is_strait(idx, land, nbr, land_comp, comp_sizes, island_max) else Feature.INLAND
 	if isthmus.has(idx):
 		return Feature.ISTHMUS
-	if int(comp_sizes[land_comp[idx]]) <= ISLAND_MAX_TILES:
+	if int(comp_sizes[land_comp[idx]]) <= island_max:
 		return Feature.ISLAND
 	for n: int in nbr[idx]:
 		if land[n] == 0:
@@ -56,13 +70,13 @@ static func _classify(idx: int, land: PackedByteArray, nbr: Array, land_comp: Pa
 
 ## 바다 타일인데 서로 다른 대륙(섬 제외) 두 개 이상에 인접 → 해군 통제권/교역로 병목.
 static func _is_strait(idx: int, land: PackedByteArray, nbr: Array, land_comp: PackedInt32Array,
-		comp_sizes: Dictionary) -> bool:
+		comp_sizes: Dictionary, island_max: int) -> bool:
 	var seen: Array[int] = []
 	for n: int in nbr[idx]:
 		if land[n] == 0:
 			continue
 		var c := land_comp[n]
-		if int(comp_sizes[c]) <= ISLAND_MAX_TILES:
+		if int(comp_sizes[c]) <= island_max:
 			continue
 		if not seen.has(c):
 			seen.append(c)

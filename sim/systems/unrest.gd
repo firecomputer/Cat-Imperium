@@ -6,12 +6,20 @@ const EmpireSystem = preload("res://sim/systems/empire_system.gd")
 ## 영토를 실제로 잃는다 — 제국 분할이 확률이 아니라 시스템 귀결로 일어난다.
 
 const OCCUPATION_W := 0.05
+## 법률의 unrest 수정자는 실제 국내 정치 비용이다. 0.15에서는 치즈 태비의 초기
+## 법률 묶음이 점령지가 없어도 턴당 +0.033을 만들고, 결속 감쇠(-0.006)를 항상
+## 압도해 모든 국가가 1프로빈스까지 확정 붕괴했다. 점령법은 별도 점령 항으로만
+## 처리하고 나머지는 0.08로 낮춰 가혹한 국가는 불안정하되 확정 사형은 아니게 한다.
+const LAW_UNREST_W := 0.08
 const INFLATION_W := 2.0
 ## §10 은 5% 초과분부터 불만으로 치지만, 이 시뮬의 평시 인플레가 이미 4~5% 다
 ## (M5 배치 측정값). 그 임계로는 모든 나라가 상시 발동 상태가 되어
 ## 세계가 통째로 조각난다. 진짜 인플레 위기(화폐 발행)만 잡도록 10% 로 올린다.
 const INFLATION_FREE := 0.10
 const CULTURE_W := 0.03
+## 동화 성향이 이문화 압력을 얼마나 지우는가 (M13.7-a). 0 으로 떨어뜨리지 않는다 —
+## 정복지가 완전히 조용해지면 제국의 문화 경계라는 압력원 자체가 사라진다.
+const ASSIMILATION_RELIEF := 0.60
 ## 계수 0.01 · 상한 5 는 거리 항 단독으로 +0.05/턴을 만든다. 반면 감쇠 합계는
 ## cohesion·suppression·garrison 을 다 더해도 -0.02 수준이라(주둔 병력이 있는
 ## 프로빈스가 16% 뿐이다) 수도거리 3 이상은 무조건 봉기했다. 국가 반경이 2 로
@@ -55,9 +63,26 @@ const REINTEGRATION_GRACE_TURNS := 16
 ## 부분 통합에서 다시 시작하게 한다 — 유예 16턴 + 0.020/턴 으로 약 28턴.
 const REINTEGRATION_INTEGRATION := 0.45
 ## 반란 규모. 도시 프로빈스는 ×3 (§10).
+## 봉기 판정을 시작하는 불만. 예전에는 1.0 에 닿는 즉시 터졌다 — 언제 터질지
+## 턴 단위로 계산되던 것이 문제였다.
+const REBELLION_FUSE := 0.90
+## 불만 1.0 에서의 턴당 봉기 확률. 임계 바로 위(0.90)에서는 0 이고 선형으로 오른다.
+const REBELLION_CHANCE := 0.35
 const REBEL_TROOP_RATIO := 0.02
 const REBEL_CITY_MULT := 3.0
 const REBEL_START_UNREST := 0.5
+
+# ---------------------------------------------------------------- 분리주의 (M14 §1)
+## 자국 땅에서 벌어진 교전·공성 한 턴치. 진압은 그 자리에서 끝나지만 기억은 남는다.
+const SEPARATISM_COMBAT := 0.02
+## 반란 진압 성공. 재통합이 불만·통합도를 되돌려 놓는 바로 그 자리에서 물린다 —
+## 진압이 공짜였던 것이 "찍어누르면 끝"의 원인이었다.
+const SEPARATISM_SUPPRESSION := 0.25
+## 불만 상승분에만 걸리는 배율. 감쇠항까지 곱하면 주둔이 오히려 이득이 된다.
+const SEPARATISM_UNREST_MULT := 1.2
+## 진압이 없는 턴의 망각. 없으면 200턴 배치에서 모든 대국이 확정 붕괴한다.
+## 0.25 를 지우는 데 약 125턴 — 진압한 세대가 죽을 만큼의 시간이다.
+const SEPARATISM_DECAY := 0.002
 
 
 static func tick(world: WorldState) -> void:
@@ -76,6 +101,11 @@ static func tick(world: WorldState) -> void:
 	for p in world.provinces:
 		if p.rebellion_grace_turns > 0:
 			p.rebellion_grace_turns -= 1
+		# 진압이 있었던 턴에는 감쇠하지 않는다. 함께 돌면 작은 교전은 순증이 0 이다.
+		if p.suppressed_this_turn:
+			p.suppressed_this_turn = false
+		else:
+			p.separatism = maxf(p.separatism - SEPARATISM_DECAY, 0.0)
 
 
 ## 주둔 병력을 프로빈스 단위로 집계한다. §10 의 garrison_ratio 는 여기서 나온다.
@@ -105,18 +135,56 @@ static func drift(p: Province, n: Nation) -> float:
 	# 점령법을 고른 나라는 본토까지 20여 턴 만에 동시 봉기해 자멸한다.
 	# 점령 정책은 정복지 정책이므로 문화가 다른 땅에만 적용한다.
 	var d := 0.0
-	if p.culture_distance(n.culture) > 0.0 or p.occupied_by_nation >= 0:
-		d += n.occupation_law_severity() * OCCUPATION_W
+	# 점령 항의 밑변은 수취가 실제로 일어나는 땅과 같다 (Province.occupation_base).
+	# 예전에는 이문화 땅이면 통합도와 무관하게 severity 전액이 영구히 걸렸다.
+	# 약탈(0.9)의 +0.045/턴 하나가 주둔·진압·결속을 다 더한 감쇠(-0.037)보다 커서
+	# 이문화 정복지는 통치 방식과 상관없이 확정 반란이었다 (실측 평균 21턴).
+	# 이제 통합이 진행될수록 수취도 불만도 함께 줄어, 온건 통치는 압력이 끝나는
+	# 경로가 되고 약탈은 그 경로를 스스로 막은 채 돈을 받는 선택이 된다.
+	d += n.occupation_law_severity() * OCCUPATION_W * p.occupation_base(n.culture)
 	d += maxf(n.inflation - INFLATION_FREE, 0.0) * INFLATION_W   # 인플레는 최강 불만 요인
 	var settled := 1.0 - p.integration * INTEGRATION_RELIEF
-	d += p.culture_distance(n.culture) * CULTURE_W * settled
+	d += p.culture_distance(n.culture) * CULTURE_W * settled \
+		* (1.0 - n.culture_bias("assimilation") * ASSIMILATION_RELIEF)
 	d += minf(p.distance_from_capital, DISTANCE_CAP) * DISTANCE_W * settled
 	d += (EXCLAVE_W if p.is_exclave else 0.0) * settled
 	d += EmpireSystem.unrest_pressure(p, n)
+	d += domestic_law_unrest(n) * LAW_UNREST_W
+	# 분리주의는 압력을 새로 만들지 않고 이미 있는 압력을 키운다. 감쇠항까지
+	# 곱하면 주둔·고문이 오히려 더 잘 듣게 되어 방향이 뒤집힌다.
+	if d > 0.0:
+		d *= 1.0 + p.separatism * SEPARATISM_UNREST_MULT
 	d -= p.garrison_ratio * GARRISON_W
 	d -= n.unrest_suppression * SUPPRESSION_W
 	d -= n.culture_bias("cohesion") * COHESION_W
 	return d
+
+
+## 진압의 유일한 기록 지점. 분리주의를 올리고 통합도를 같은 폭만큼 되돌린다 —
+## 군대로 누른 땅은 행정적으로도 그만큼 뒤로 밀린다 (M14 §1).
+static func register_suppression(world: WorldState, p: Province, amount: float) -> void:
+	if amount <= 0.0:
+		return
+	var before := p.separatism
+	p.separatism = clampf(p.separatism + amount, 0.0, 1.0)
+	p.integration = maxf(p.integration - (p.separatism - before), 0.0)
+	p.suppressed_this_turn = true
+	world.log_event("suppression", {
+		"nation": p.owner_nation,
+		"province": p.id,
+		"separatism": p.separatism,
+		"integration": p.integration,
+	})
+
+
+## 점령법의 불만은 위의 occupation_base 항에서 정복지에만 이미 적용된다.
+## 전체 law_modifier 합계에 다시 넣으면 약탈 정책이 같은 문화의 본토에도 중복된다.
+static func domestic_law_unrest(n: Nation) -> float:
+	var total := n.law_modifier("unrest")
+	var occupation: Law = n.laws.get("occupation")
+	if occupation != null:
+		total -= occupation.modifier("unrest")
+	return total
 
 
 static func tick_province(world: WorldState, p: Province, n: Nation) -> void:
@@ -126,12 +194,17 @@ static func tick_province(world: WorldState, p: Province, n: Nation) -> void:
 	if p.rebellion_grace_turns > 0:
 		p.unrest = minf(p.unrest, 0.99)
 		return
-	if p.unrest < 1.0:
+	if p.unrest < REBELLION_FUSE:
 		return
 	# 한 프로빈스짜리 나라에서는 갈라설 땅이 없다. 이 가드가 없으면 반란국이
 	# 자기 자신에게서 다시 갈라져 나오며 세계가 무한 분할된다.
 	if n.provinces.size() <= 1:
-		p.unrest = 0.99
+		p.unrest = REBELLION_FUSE - 0.01
+		return
+	# 임계를 넘었다고 그 턴에 반드시 터지지는 않는다. 언제 터질지 모르는 것이 봉기의
+	# 본질이다. 압력이 높을수록 빨리 터지고, 시드가 같으면 같은 턴에 터진다.
+	var pressure := (p.unrest - REBELLION_FUSE) / (1.0 - REBELLION_FUSE)
+	if world.rng_pool.get_rng("rebellion").randf() > pressure * REBELLION_CHANCE:
 		return
 	spawn_rebellion(world, p, n)
 
@@ -279,6 +352,9 @@ static func reclaim_from_rebel(world: WorldState, p: Province, rebel: Nation,
 	p.unrest = minf(p.unrest, REINTEGRATION_UNREST)
 	p.integration = minf(p.integration, REINTEGRATION_INTEGRATION)
 	p.rebellion_grace_turns = REINTEGRATION_GRACE_TURNS
+	# 재통합이 되돌려 놓은 값 위에 진압의 대가를 얹는다. 순서가 반대면
+	# integration 리셋이 분리주의의 통합 삭감을 통째로 지운다.
+	register_suppression(world, p, SEPARATISM_SUPPRESSION)
 	_recompute_capital_distances(world, winner)
 	world.log_event("rebellion_suppressed", {
 		"nation": winner.id,

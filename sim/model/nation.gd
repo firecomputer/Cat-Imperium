@@ -6,6 +6,7 @@ var name: String = ""
 var culture: int = Culture.Kind.KOREAN_SHORTHAIR
 var culture_params: Dictionary = {}
 var capital: int = -1                     # 프로빈스 id
+var start_region: int = -1                # M13 건국 수도의 고정 지리 라벨
 var provinces: Array[int] = []
 var characters: Array[int] = []           # WorldState.characters 인덱스
 var armies: Array[int] = []               # WorldState.armies 인덱스
@@ -18,7 +19,14 @@ var real_gdp: float = 0.0
 var prev_real_gdp: float = 0.0
 var infra_mean: float = 0.0               # 인구 가중 평균 (§4.7 익스플로잇 방지)
 var controlled_gdp: float = 0.0           # 점령당하지 않은 땅의 GDP. 세수는 여기서만 나온다
+## 점령법이 물리는 GDP (Province.occupation_base 가중). Economy 의 수취와
+## LawEvaluator 의 immediate_income 이 같은 이 값을 읽는다 — AI 가 보는 수익과
+## 실제로 들어오는 수익이 어긋나면 법 선택이 시뮬과 무관해진다.
+var occupation_gdp: float = 0.0
 var manpower: float = -1.0                # 남은 동원 인력. -1 은 미초기화
+## 0~1. 대규모 전투 손실은 장교단·보급조직·동원망까지 무너뜨린다. 병력을 다시
+## 모아도 이 값이 회복되기 전에는 같은 전투력을 즉시 낼 수 없다.
+var military_readiness: float = 1.0
 
 # 재정 / 통화
 var treasury: float = 0.0
@@ -75,7 +83,13 @@ var allies: Array[int] = []               # 방어동맹
 var alliance_expiry: Dictionary = {}      # nation_id → 갱신 심사 턴 (§11.4)
 var truces: Dictionary = {}               # nation_id → 휴전 만료 턴
 var wars: Array[int] = []                 # WorldState.wars 인덱스
-var war_weariness: float = 0.0            # 0 ~ 1
+## 0~1. 전쟁을 계속할 정치적 여력. 사상자가 깎고 승전이 올리며 평시에 천천히 회복한다.
+## 전쟁 피로의 반대 방향 표현이자 동원·편성 속도의 원천이다 (M14 §4).
+var war_support: float = 0.7
+## war_support 가 1.0 인 채로 평화가 이어진 턴 수. 오래 쌓이면 개전 문턱을 무시한다.
+var peace_streak_turns: int = 0
+## 이번 턴에 야전군을 새로 편성할 수 있는 몫. 1.0 을 넘겨 비축되지 않는다 (M14 §3).
+var spawn_credit: float = 1.0
 var prev_province_count: int = 0
 var expansion_rate: float = 0.0           # 최근 영토 증가율 (threat 계산용)
 var last_war_turn: int = -999             # 연속 선전포고 방지
@@ -101,11 +115,34 @@ var overextension: float = 0.0
 var foreign_exposure: float = 0.0
 var authority_band: int = 1               # 0 위기 / 1 보통 / 2 강성, 사건 중복 방지
 
+## 인재 기질. 세계 생성 때 국가마다 한 번 뽑는 능력치 평균 편차다 (§인재 편차).
+## 모든 나라의 인물 풀이 똑같으면 아무도 전력 우세를 못 만들어 개전 게이트가
+## 열리지 않는다 — 표적 평가의 94%가 t_power 에서 죽던 원인 중 하나다.
+var talent_bias: float = 0.0
+## 재직 중인 정치 고문들의 매파 성향 평균 (0~1, 중립 0.5). AdvisorEffects 가 갱신하고
+## Diplomacy 의 개전 판정이 읽는다.
+var war_hawk: float = 0.5
+## 재직 중인 정치 고문들의 강제 진압 선호 평균 (0~1, 중립 0.5). 낮은 내각은
+## 분리주의가 끓는 땅에 군대를 보내기를 꺼린다 (M14 §5).
+var suppression_will: float = 0.5
+
 var laws: Dictionary = {}                 # category → Law
+## law_modifier 결과 캐시. 값은 국가 단위 상수인데 호출은 프로빈스마다 일어난다 —
+## 917 프로빈스 지도에서 이 8개 카테고리 순회가 tick_infra 시간의 큰 몫이었다.
+## laws 를 직접 대입하면 캐시가 상하므로 반드시 set_law() 로 쓴다.
+var _law_cache: Dictionary = {}
+
+
+## 법률 채택의 유일한 입구. 여기서만 캐시가 비워진다.
+func set_law(category: String, law: Law) -> void:
+	laws[category] = law
+	_law_cache.clear()
 
 
 ## 채택 법률들의 합성치. 곱셈 계열은 중립 1.0, 덧셈 계열은 중립 0.0.
 func law_modifier(key: String) -> float:
+	if _law_cache.has(key):
+		return _law_cache[key]
 	var multiplicative := key in Law.MULTIPLICATIVE
 	var v := 1.0 if multiplicative else 0.0
 	for cat in Law.CATEGORIES:              # Dictionary 순회 순서에 의존 금지 (§15)
@@ -117,6 +154,7 @@ func law_modifier(key: String) -> float:
 			v *= (1.0 + m)
 		else:
 			v += m
+	_law_cache[key] = v
 	return v
 
 

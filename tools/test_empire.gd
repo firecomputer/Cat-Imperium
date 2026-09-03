@@ -27,6 +27,7 @@ func _test_subjugation_waits_for_its_goal() -> void:
 	var war := Diplomacy.declare_war(world, world.nations[0], world.nations[1],
 		"test", War.Goal.SUBJUGATION)
 	war.start_turn = -Peace.MIN_WAR_TURNS
+	world.provinces[1].occupied_by_nation = 0   # 종전 자격 (SETTLE_CONSUMED_RATIO)
 	war.warscore = Peace.SUBJUGATION_SCORE - 1.0
 	Peace._consider_peace(world, war)
 	assert(war.is_active and world.nations[1].overlord < 0,
@@ -50,9 +51,15 @@ func _test_vassal_tribute_and_relationship_invariants() -> void:
 		"속국의 기존 독립 동맹은 해소된다")
 	overlord.income = 100.0
 	vassal.income = 50.0
+	# 공납은 충성도에 비례한다 — 실효 공납 = 소득 × TRIBUTE_SHARE × (0.4 ~ 1.0).
+	# 충성도를 안 물리면 억지로 붙인 속국이 자발적 속국과 똑같이 낸다.
+	var expected := 50.0 * EmpireSystem.TRIBUTE_SHARE \
+		* (0.4 + vassal.vassal_loyalty * EmpireSystem.TRIBUTE_LOYALTY_SPAN)
 	EmpireSystem.collect_tribute(world)
-	assert(is_equal_approx(vassal.income, 45.0) and is_equal_approx(overlord.income, 105.0),
-		"속국 세수의 10%가 종주국으로 이전된다")
+	assert(expected > 0.0, "공납이 0 이면 이 검사는 아무것도 보지 않는다")
+	assert(is_equal_approx(vassal.income, 50.0 - expected)
+		and is_equal_approx(overlord.income, 100.0 + expected),
+		"속국 세수의 일부가 충성도에 비례해 종주국으로 이전된다")
 
 
 func _test_vassals_join_by_loyalty() -> void:
@@ -126,7 +133,11 @@ func _test_defeated_independence_restores_vassalage() -> void:
 	var war := Diplomacy.declare_war(world, former_vassal, overlord,
 		"independence", War.Goal.INDEPENDENCE)
 	war.start_turn = -Peace.MIN_WAR_TURNS
-	war.warscore = -Peace.ACCEPT_SCORE
+	# 패자의 35점 항복 의사만으로 승자의 독립전쟁 진압을 끊지 않는다.
+	# 방어측 승리도 일반 정복과 같은 결정적 우세에서 끝난다.
+	war.warscore = -Peace.CONQUEST_SETTLE_SCORE
+	# 진 쪽은 공격자인 former_vassal 이다 — 그 국토가 갈려야 협상이 열린다.
+	world.provinces[1].occupied_by_nation = 0
 	Peace._consider_peace(world, war)
 	assert(not war.is_active and former_vassal.overlord == overlord.id,
 		"독립전쟁에서 패하면 종속 관계가 복구된다")
@@ -175,6 +186,7 @@ func _three_nations() -> WorldState:
 
 func _world(count: int) -> WorldState:
 	var world := WorldState.new()
+	world.rng_pool = RngPool.new(101)
 	for i in range(count):
 		var n := Nation.new()
 		n.id = i

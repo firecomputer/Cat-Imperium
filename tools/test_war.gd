@@ -16,7 +16,12 @@ func _initialize() -> void:
 	_test_single_province_state_cannot_split()
 	_test_defender_wins_an_even_fight()
 	_test_battle_takes_many_turns()
+	_test_only_local_power_blocks_advance()
 	_test_siege_is_not_instant_and_forts_slow_it()
+	_test_any_force_advances_a_siege()
+	_test_allied_armies_share_one_siege()
+	_test_front_extends_from_occupied_ground()
+	_test_army_without_fronts_holds_occupied_ground()
 	_test_liberating_own_province_clears_occupation()
 	_test_occupied_land_pays_no_tax()
 	_test_supply_decays_with_invasion_depth()
@@ -25,6 +30,8 @@ func _initialize() -> void:
 	_test_truce_blocks_a_new_war()
 	_test_alliance_deters_aggression()
 	_test_warscore_follows_occupation()
+	_test_loser_offer_does_not_force_winner_to_settle()
+	_test_settlement_requires_consumed_territory()
 	_test_demands_prefer_connected_land()
 	_test_annexed_exclave_pays_the_price()
 	_test_crushing_subjugation_takes_land()
@@ -72,13 +79,25 @@ func _test_garrison_suppresses_unrest() -> void:
 		"완전 주둔은 불만 증가를 정확히 GARRISON_W 만큼 상쇄한다")
 
 
+## 임계(REBELLION_FUSE)를 넘어도 봉기는 REBELLION_CHANCE 확률로만 터진다 (M8.5) —
+## "언제 터질지 모르는 것이 봉기의 본질" 이다. 회귀 테스트가 보는 것은 *터졌을 때
+## 무엇이 성립하는가* 이므로, 한 틱이 아니라 터질 때까지 돌린다.
+func _tick_until_rebellion(world: WorldState, p: Province, n: Nation) -> void:
+	var owner := p.owner_nation
+	for i in range(60):
+		p.unrest = 1.0
+		Unrest.tick_province(world, p, n)
+		if p.owner_nation != owner:
+			return
+	assert(false, "불만 1.0 이면 60턴 안에 반드시 봉기한다")
+
+
 func _test_rebellion_spawns_independent_nation() -> void:
 	var world := _world(3)
 	var n: Nation = world.nations[0]
 	n.inflation = 0.15                      # drift 를 확실히 양수로 만든다
 	var p: Province = world.provinces[2]
-	p.unrest = 1.0
-	Unrest.tick_province(world, p, n)
+	_tick_until_rebellion(world, p, n)
 
 	assert(world.nations.size() == 2, "반란군은 독립 국가로 스폰된다")
 	var rebel: Nation = world.nations[1]
@@ -96,14 +115,12 @@ func _test_rebellion_spawns_independent_nation() -> void:
 func _test_city_rebellion_is_three_times_bigger() -> void:
 	var plain := _world(2)
 	plain.nations[0].inflation = 0.15
-	plain.provinces[1].unrest = 1.0
-	Unrest.tick_province(plain, plain.provinces[1], plain.nations[0])
+	_tick_until_rebellion(plain, plain.provinces[1], plain.nations[0])
 
 	var city := _world(2)
 	city.nations[0].inflation = 0.15
 	city.provinces[1].has_city = true
-	city.provinces[1].unrest = 1.0
-	Unrest.tick_province(city, city.provinces[1], city.nations[0])
+	_tick_until_rebellion(city, city.provinces[1], city.nations[0])
 
 	var plain_troops := Military.total_troops(plain, plain.nations[1])
 	var city_troops := Military.total_troops(city, city.nations[1])
@@ -117,8 +134,7 @@ func _test_capital_rebellion_relocates_capital() -> void:
 	world.provinces[1].population = 9000.0
 	world.provinces[2].population = 5000.0
 	var capital: Province = world.provinces[0]
-	capital.unrest = 1.0
-	Unrest.tick_province(world, capital, n)
+	_tick_until_rebellion(world, capital, n)
 
 	assert(n.capital == 1, "수도를 잃으면 남은 최대 인구 프로빈스로 옮긴다")
 	assert(is_equal_approx(world.provinces[1].distance_from_capital, 0.0), "새 수도의 거리는 0 이다")
@@ -147,7 +163,9 @@ func _test_single_province_state_cannot_split() -> void:
 	world.provinces[0].unrest = 1.0
 	Unrest.tick_province(world, world.provinces[0], n)
 	assert(world.nations.size() == 1, "1프로빈스 국가는 더 갈라질 수 없다")
-	assert(n.is_alive and is_equal_approx(world.provinces[0].unrest, 0.99), "불만은 남지만 나라는 쪼개지지 않는다")
+	# 임계 바로 아래로 눌러 둔다. 임계 위에 남기면 매 턴 봉기 판정을 다시 굴린다.
+	assert(n.is_alive and is_equal_approx(world.provinces[0].unrest,
+		Unrest.REBELLION_FUSE - 0.01), "불만은 남지만 나라는 쪼개지지 않는다")
 
 
 func _test_defender_wins_an_even_fight() -> void:
@@ -173,14 +191,39 @@ func _test_battle_takes_many_turns() -> void:
 	while weak.is_alive and turns < 100:
 		Military.resolve_province_battles(world)
 		turns += 1
-	assert(turns >= 5, "전투는 여러 턴에 걸쳐 결판난다 (실제 %d턴)" % turns)
+	# 손실 강화 뒤 압도적 전력차는 3턴에 궤멸한다. 여전히 한 틱 즉사는 아니지만
+	# 패자가 5턴 이상 비비며 매 턴 재모병하던 경로는 막혀야 한다.
+	assert(turns >= 3 and turns <= 6,
+		"압도적 전력차의 전투는 3~6턴에 결판나야 한다 (실제 %d턴)" % turns)
 	assert(strong.troops > 2000, "압승한 쪽도 손실은 있지만 궤멸하지 않는다")
+
+
+## 국가 전체 전력 열세는 공격을 막지 않는다. 실제 진입 여부는 다음 칸에 있는
+## 적 전력의 60% 문턱 하나로만 결정한다.
+func _test_only_local_power_blocks_advance() -> void:
+	var world := _two_nations()
+	world.provinces[1].infra = 0.0
+	var attacker := Military.create_army(world, world.nations[0], 0, 59)
+	Military.create_army(world, world.nations[1], 1, 100)
+	world.rebuild_army_index()
+
+	WarAI._assign_targets(world, world.nations[0], [1] as Array[int])
+	assert(attacker.target_province == 1,
+		"전체 전력 열세여도 적 전선을 공격 목표로 삼는다")
+	assert(not WarAI._can_engage(world, attacker, 1),
+		"다음 칸 적 전력의 60% 미만이면 진입하지 않는다")
+	attacker.troops = 60
+	assert(WarAI._can_engage(world, attacker, 1),
+		"다음 칸 적 전력의 60%부터 진입한다")
 
 
 func _test_siege_is_not_instant_and_forts_slow_it() -> void:
 	var world := _two_nations()
 	var target: Province = world.provinces[1]
-	var army := Military.create_army(world, world.nations[0], 1, 2000)
+	# SIEGE_TROOP_NORM 은 "인구의 1% 병력이면 표준 속도" 다. 인구 10000 의 20% 를
+	# 들이대면 troop_factor 가 상한(2.0)에 붙어 3턴에 끝나는 것이 정상이 된다.
+	var army := Military.create_army(world, world.nations[0], 1,
+		int(world.provinces[1].population * WarAI.SIEGE_TROOP_NORM))
 	world.rebuild_army_index()
 	var turns := 0
 	while target.occupied_by_nation < 0 and turns < 200:
@@ -192,10 +235,81 @@ func _test_siege_is_not_instant_and_forts_slow_it() -> void:
 	var fortified := _two_nations()
 	fortified.provinces[1].infra = 8.0
 	fortified.provinces[1].has_city = true
-	var sieger := Military.create_army(fortified, fortified.nations[0], 1, 2000)
+	var sieger := Military.create_army(fortified, fortified.nations[0], 1,
+		int(fortified.provinces[1].population * WarAI.SIEGE_TROOP_NORM))
 	assert(Military.siege_rate(fortified.provinces[1], sieger)
 		< Military.siege_rate(target, army),
 		"인프라와 도시는 공성을 늦춘다")
+
+
+## 공성은 최소 병력이나 현지 방어군 비율로 정지하지 않는다. 살아 있는 공성군이면
+## 병력에 비례해 느리더라도 매 턴 진행한다.
+func _test_any_force_advances_a_siege() -> void:
+	var world := _two_nations()
+	Military.create_army(world, world.nations[0], 1, 1)
+	Military.create_army(world, world.nations[1], 1, 100)
+	world.rebuild_army_index()
+	Military.tick_sieges(world)
+	assert(world.provinces[1].siege_progress > 0.0,
+		"소수 공성군과 더 큰 방어군이 함께 있어도 공성은 진행된다")
+
+
+## 공성의 주인은 나라가 아니라 진영이다. 같은 편 두 나라가 한 칸에 서면 예전에는
+## 서로 siege_by_nation 을 뺏으며 진행도를 매 턴 0 으로 되돌려, 겹친 공성은
+## 영원히 한 턴치에서 멈췄다 (실측: 리셋 745건 전부가 이 경우).
+func _test_allied_armies_share_one_siege() -> void:
+	var world := _two_nations()
+	var ally := Nation.new()
+	ally.id = 2
+	ally.culture = Culture.Kind.KOREAN_SHORTHAIR
+	ally.culture_params = Culture.PRESETS[ally.culture].duplicate()
+	world.nations.append(ally)
+	Diplomacy.join_war(world, world.wars[0], ally, 1, "test")
+	var troops := int(world.provinces[1].population * WarAI.SIEGE_TROOP_NORM)
+	Military.create_army(world, world.nations[0], 1, troops)
+	Military.create_army(world, ally, 1, troops)
+	world.rebuild_army_index()
+
+	Military.tick_sieges(world)
+	var first := world.provinces[1].siege_progress
+	assert(first > 0.0, "공성이 시작된다")
+	Military.tick_sieges(world)
+	assert(world.provinces[1].siege_progress > first
+		or world.provinces[1].occupied_by_nation >= 0,
+		"같은 편 두 나라가 겹쳐도 진행도는 쌓인다")
+
+
+## 전선은 점령지에서도 뻗는다. 소유지 기준으로만 그리면 국경 한 줄을 먹은 순간
+## 그 너머가 목표에서 사라져 야전군이 수도로 돌아가고, 그 사이 적이 새 군대를
+## 뽑아 도로 가져간다 (실측: 점령지 인접 적지의 54.8% 가 전선에서 빠졌다).
+func _test_front_extends_from_occupied_ground() -> void:
+	var world := _two_nations()
+	var deep := Province.new()
+	deep.id = 2
+	deep.owner_nation = 1
+	deep.culture = world.nations[1].culture
+	deep.population = 10000.0
+	deep.gdp = 1000000.0
+	deep.gdp_pc = 100.0
+	deep.land_neighbors = [1]
+	world.provinces.append(deep)
+	world.provinces[1].land_neighbors.append(2)
+	world.nations[1].provinces.append(2)
+	world.provinces[1].occupied_by_nation = 0
+
+	var fronts := WarAI._fronts(world, world.nations[0])
+	assert(fronts.has(2), "점령지 너머의 적지도 전선이다")
+	assert(not fronts.has(1), "이미 점령한 칸은 다시 목표가 되지 않는다")
+
+
+## 칠 곳이 남지 않았을 때 수도로 돌아가면 점령지가 빈다.
+func _test_army_without_fronts_holds_occupied_ground() -> void:
+	var world := _two_nations()
+	world.provinces[1].occupied_by_nation = 0
+	var army := Military.create_army(world, world.nations[0], 1, 100)
+	world.rebuild_army_index()
+	WarAI._assign_targets(world, world.nations[0], [] as Array[int])
+	assert(army.target_province == 1, "전선이 없어도 점령지를 비우지 않는다")
 
 
 func _test_liberating_own_province_clears_occupation() -> void:
@@ -308,6 +422,56 @@ func _test_warscore_follows_occupation() -> void:
 	assert(war.warscore < -60.0, "반대로 당하면 점수가 음수가 된다")
 
 
+func _test_loser_offer_does_not_force_winner_to_settle() -> void:
+	var world := _two_nations()
+	var war: War = world.wars[0]
+	world.turn = Peace.MIN_WAR_TURNS
+	# 종전 자격(SETTLE_CONSUMED_RATIO)을 먼저 채운다. 이 검사는 점수 경로만 본다.
+	world.provinces[1].occupied_by_nation = 0
+	war.warscore = Peace.ACCEPT_SCORE
+	Peace._consider_peace(world, war)
+	assert(war.is_active,
+		"패자가 35점에 협상을 제안해도 정복 승자가 목표를 달성하기 전에는 계속 싸운다")
+
+	war.warscore = Peace.CONQUEST_SETTLE_SCORE
+	Peace._consider_peace(world, war)
+	assert(not war.is_active, "정복 목표 점수에 도달하면 강화가 성립한다")
+
+	var prolonged := _two_nations()
+	var prolonged_war: War = prolonged.wars[0]
+	prolonged.turn = 45
+	prolonged.provinces[1].occupied_by_nation = 0
+	prolonged_war.warscore = Peace.PARTIAL_PEACE_SCORE
+	Peace._consider_peace(prolonged, prolonged_war)
+	assert(not prolonged_war.is_active,
+		"45턴까지 목표를 못 이루면 낮은 우세라도 피로 종전은 허용한다")
+
+	var stalemate := _two_nations()
+	stalemate.turn = Peace.EXHAUSTION_TURNS
+	Peace._consider_peace(stalemate, stalemate.wars[0])
+	assert(stalemate.wars[0].is_active,
+		"국토가 갈리지 않은 교착은 45턴 피로선에서도 끝나지 않는다")
+	# warscore 0 이면 지는 쪽은 공격 진영이다 — 그쪽 국토가 소진돼야 열린다.
+	stalemate.provinces[0].occupied_by_nation = 1
+	Peace._consider_peace(stalemate, stalemate.wars[0])
+	assert(not stalemate.wars[0].is_active,
+		"국토를 소진한 교착은 첫 45턴 피로선에서 백지평화로 끝낸다")
+
+
+## 전쟁은 점수가 아니라 국토로 끝난다 — 지는 쪽 영토의 대부분이 갈려 나가기
+## 전에는 어떤 강화 경로도 열리지 않는다.
+func _test_settlement_requires_consumed_territory() -> void:
+	var world := _two_nations()
+	var war: War = world.wars[0]
+	world.turn = Peace.MIN_WAR_TURNS
+	war.warscore = 100.0
+	Peace._consider_peace(world, war)
+	assert(war.is_active, "점수가 만점이어도 적 국토를 소진하기 전에는 종전하지 않는다")
+	world.provinces[1].occupied_by_nation = 0
+	Peace._consider_peace(world, war)
+	assert(not war.is_active, "적 국토를 대부분 소진하면 강화가 성립한다")
+
+
 func _test_demands_prefer_connected_land() -> void:
 	var world := _demand_world()
 	var winner: Nation = world.nations[0]
@@ -340,6 +504,7 @@ func _test_annexed_exclave_pays_the_price() -> void:
 ## 인접한 두 나라, 각 1프로빈스. 프로빈스 0 은 0번국, 1 은 1번국 소유다.
 func _two_nations() -> WorldState:
 	var world := WorldState.new()
+	world.rng_pool = RngPool.new(103)
 	for i in range(2):
 		var n := Nation.new()
 		n.id = i
@@ -366,6 +531,7 @@ func _two_nations() -> WorldState:
 ## 본토(0)와 바다 건너 섬(1). 둘 다 같은 나라 땅이고 분지 5 를 공유한다.
 func _island_world() -> WorldState:
 	var world := WorldState.new()
+	world.rng_pool = RngPool.new(104)
 	var n := Nation.new()
 	n.id = 0
 	n.capital = 0
@@ -390,6 +556,7 @@ func _island_world() -> WorldState:
 ## 승자(0) — 적지 1 — 적지 2 — 고립된 적지 3. 1,2,3 은 모두 점령 상태다.
 func _demand_world() -> WorldState:
 	var world := WorldState.new()
+	world.rng_pool = RngPool.new(105)
 	for i in range(2):
 		var n := Nation.new()
 		n.id = i
@@ -420,6 +587,7 @@ func _demand_world() -> WorldState:
 ## 사슬 모양 국가 하나. 프로빈스 0 이 수도다.
 func _world(count: int) -> WorldState:
 	var world := WorldState.new()
+	world.rng_pool = RngPool.new(106)
 	var n := Nation.new()
 	n.id = 0
 	n.capital = 0
@@ -448,7 +616,7 @@ func _world(count: int) -> WorldState:
 ## SUBJUGATION 전쟁은 35 만 넘으면 땅을 한 뼘도 안 뺏고 속국화로 끝났다 —
 ## warscore 100 이어도 같았다 (M10 §3.1).
 func _test_crushing_subjugation_takes_land() -> void:
-	for score in [50.0, 95.0]:
+	for score in [Peace.SUBJUGATION_SCORE, 95.0]:
 		var world := _two_nations()
 		world.rng_pool = RngPool.new(3)    # rank_demands 의 해상 요구 판정이 쓴다
 		var war: War = world.wars[0]

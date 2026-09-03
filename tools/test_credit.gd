@@ -19,6 +19,8 @@ func _initialize() -> void:
 	_test_default_caps_debt_to_gdp()
 	_test_military_penalty_recovers_on_surplus()
 	_test_default_memory_decays()
+	_test_infrastructure_cost_scales_with_real_size()
+	_test_infrastructure_overbuild_has_diminishing_returns()
 	print("credit tests: PASS")
 	quit(0)
 
@@ -40,6 +42,7 @@ func _nation() -> Nation:
 
 func _world(n: Nation) -> WorldState:
 	var world := WorldState.new()
+	world.rng_pool = RngPool.new(102)
 	world.nations = [n]
 	return world
 
@@ -183,3 +186,36 @@ func _test_default_memory_decays() -> void:
 	assert(n.default_memory < before * 0.6,
 		"파산 기억은 시간에 따라 감쇠한다 (%.2f -> %.2f)" % [before, n.default_memory])
 	assert(n.default_history == 1, "통계용 카운터는 그대로 남는다")
+
+
+func _infra_province(tile_count: int) -> Province:
+	var p := Province.new()
+	p.infra = 3.0
+	p.infra_cap = 8.0
+	p.population = 5000.0
+	p.gdp_pc = Economy.gdp_pc_anchor(p.infra)
+	p.tiles.resize(tile_count)
+	return p
+
+
+func _test_infrastructure_cost_scales_with_real_size() -> void:
+	var n := _nation()
+	var small := _infra_province(5)
+	var large := _infra_province(40)
+	assert(Economy.infra_build_cost(large, n) > Economy.infra_build_cost(small, n) * 4.0,
+		"큰 프로빈스의 인프라를 작은 지역과 같은 절대비용으로 올리면 안 된다")
+	assert(Economy.infra_upkeep(large, n) > Economy.infra_upkeep(small, n) * 4.0,
+		"유지비도 실제 인프라 면적을 따라야 한다")
+
+
+func _test_infrastructure_overbuild_has_diminishing_returns() -> void:
+	var n := _nation()
+	var p := _infra_province(18)
+	var at_cap := Economy.gdp_pc_anchor(p.infra_cap)
+	p.infra = p.infra_cap + 5.0
+	var overbuilt := Economy.province_anchor(p, n)
+	assert(overbuilt < Economy.gdp_pc_anchor(p.infra),
+		"지역 상한을 넘긴 인프라가 전역 앵커를 그대로 따라가면 편차가 다시 사라진다")
+	assert(overbuilt > at_cap, "비싼 초과 건설에는 작더라도 역전 경로가 남아야 한다")
+	assert(Economy.build_yield(p, n) < Economy.MIN_BUILD_RETURN,
+		"상한을 크게 넘긴 건설은 투자 문턱 아래로 떨어져야 한다")

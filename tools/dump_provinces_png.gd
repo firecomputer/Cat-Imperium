@@ -29,12 +29,20 @@ func _initialize() -> void:
 	var mode: String = args.get("mode", "province")
 	var scale_px := int(args.get("scale", TILE_PX_DEFAULT))
 	var out_path: String = args.get("out", "res://out/%s_%d.png" % [mode, seed_value])
+	var source_kind := MapSource.parse_kind(args.get("map-source", "earth"))
+	if source_kind < 0:
+		quit(2)
+		return
 
-	var map: Dictionary = MapGenerator.generate(seed_value)
-	var nbr := MapGenerator.neighbor_cache()
-	var tagged := FeatureTagger.tag(map["land"], nbr)
+	var map: Dictionary = MapSource.create_map(seed_value, source_kind)
+	var nbr := MapSource.neighbor_cache(map["width"], map["height"])
+	var tagged := FeatureTagger.tag(map["land"], nbr, map["forced_features"],
+			float(map.get("granularity", 1.0)))
+	tagged["country"] = map.get("country", PackedInt32Array())
+	tagged["sea_zone"] = tagged["sea_basin"]
 	var rng := RngPool.new(map["seed"]).get_rng("province_split")
-	var provinces := ProvinceSplitter.split(map["land"], map["elevation"], tagged, rng)
+	var provinces := ProvinceSplitter.split(map["land"], map["elevation"], tagged, rng,
+		map["width"], nbr)
 
 	var stats := ProvinceStats.summarize(provinces, map["land"], tagged)
 	print("seed=%d (attempts=%d)" % [map["seed"], map["attempts"]])
@@ -64,14 +72,16 @@ func _render(map: Dictionary, tagged: Dictionary, provinces: Array[Province],
 		for t in p.tiles:
 			owner_of[t] = p.id
 
-	var img_w := int((MapGenerator.W + 1) * s)
-	var img_h := int(MapGenerator.H * Hex.SQRT3_2 * s) + s
+	var width: int = map["width"]
+	var height: int = map["height"]
+	var img_w := int((width + 1) * s)
+	var img_h := int(height * Hex.SQRT3_2 * s) + s
 	var img := Image.create(img_w, img_h, false, Image.FORMAT_RGB8)
 	img.fill(Color.BLACK)
 
-	for row in range(MapGenerator.H):
-		for col in range(MapGenerator.W):
-			var idx := row * MapGenerator.W + col
+	for row in range(height):
+		for col in range(width):
+			var idx := row * width + col
 			var c := _tile_color(idx, mode, land, features, owner_of, provinces)
 			var x0 := int((col + (0.5 if row % 2 == 1 else 0.0)) * s)
 			var y0 := int(row * Hex.SQRT3_2 * s)

@@ -38,7 +38,7 @@ static func adopt_for(n: Nation) -> void:
 	var pool := laws_by_category()
 	for cat in Law.CATEGORIES:
 		if pool.has(cat):
-			n.laws[cat] = _best(n, pool[cat])
+			n.set_law(cat, _best(n, pool[cat]))
 
 
 static func tick(world: WorldState) -> void:
@@ -56,7 +56,7 @@ static func tick(world: WorldState) -> void:
 			continue
 		var best := _best(n, pool[cat])
 		if best != null and best != n.laws.get(cat):
-			n.laws[cat] = best
+			n.set_law(cat, best)
 
 
 static func _best(n: Nation, candidates: Array) -> Law:

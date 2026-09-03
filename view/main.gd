@@ -45,8 +45,11 @@ var event_cursor := 0
 var event_lines: Array[String] = []
 
 var _ui_timer := 0.0
-## 프로빈스 → 마지막 전투 턴. 매 턴 쏟아지는 battle_resolved 를 개시/종료 두 줄로 줄인다.
+## 프로빈스 → {start, last, losses{국가:누적사상자}, power{국가:직전전력}}.
+## 매 턴 쏟아지는 battle_resolved 를 기록 두 줄로 줄이고, 전투 패널의 재료가 된다.
 var _active_battles: Dictionary = {}
+## 전투 패널이 보고 있는 프로빈스. -1 이면 닫혀 있다.
+var battle_province := -1
 
 var nation_gdp_history: Dictionary = {}
 var nation_debt_history: Dictionary = {}
@@ -74,6 +77,9 @@ var war_toggle: Button
 var search_panel: PanelContainer
 var search_input: LineEdit
 var search_list: ItemList
+var battle_panel: PanelContainer
+var battle_title: Label
+var battle_detail: RichTextLabel
 
 var market_selected := {
 	Market.AssetKind.BOND: -1,
@@ -122,6 +128,7 @@ func _unhandled_key_input(event: InputEvent) -> void:
 			_open_search()
 		KEY_ESCAPE:
 			_close_search()
+			_close_battle()
 
 
 func _build_theme() -> void:
@@ -279,8 +286,49 @@ func _build_map_panel() -> Control:
 	map_renderer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	map_renderer.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	map_renderer.province_selected.connect(_on_province_selected)
+	map_renderer.battle_selected.connect(_on_battle_selected)
 	box.add_child(map_renderer)
+	map_renderer.add_child(_build_battle_overlay())
 	return panel
+
+
+## 전투 패널은 지도 위에 뜬다. 전황을 지도와 같이 읽는 것이 목적이라 사이드 탭으로
+## 빼면 시선이 갈린다. map_renderer 의 자식이라 지도 영역 밖으로 나가지 않는다.
+func _build_battle_overlay() -> Control:
+	battle_panel = PanelContainer.new()
+	battle_panel.visible = false
+	battle_panel.add_theme_stylebox_override("panel", _panel_style(Color("0e1723"), 6, true))
+	battle_panel.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
+	battle_panel.offset_left = 12
+	battle_panel.offset_right = 384
+	battle_panel.offset_top = -156
+	battle_panel.offset_bottom = -12
+	var margin := MarginContainer.new()
+	_set_margins(margin, 12, 8, 12, 10)
+	battle_panel.add_child(margin)
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 6)
+	margin.add_child(box)
+
+	var head := HBoxContainer.new()
+	head.add_theme_constant_override("separation", 6)
+	box.add_child(head)
+	battle_title = _label("", 15, TEXT)
+	battle_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	head.add_child(battle_title)
+	var close := _button("✕")
+	close.pressed.connect(_close_battle)
+	head.add_child(close)
+
+	battle_detail = RichTextLabel.new()
+	battle_detail.bbcode_enabled = true
+	battle_detail.fit_content = false
+	battle_detail.scroll_active = true
+	battle_detail.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	battle_detail.add_theme_color_override("default_color", TEXT)
+	battle_detail.add_theme_font_size_override("normal_font_size", 12)
+	box.add_child(battle_detail)
+	return battle_panel
 
 
 func _build_side_panel() -> Control:
@@ -449,6 +497,7 @@ func _new_world() -> void:
 	event_cursor = world.events.size()
 	event_lines.clear()
 	_active_battles.clear()
+	_close_battle()
 	event_log.text = ""
 	_append_log("[color=#f2b84b]세계 생성[/color]  seed %d · 프로빈스 %d · 국가 %d" % [
 		seed, world.provinces.size(), world.nations.size()])
@@ -584,6 +633,7 @@ func _refresh_panels(force_market: bool) -> void:
 	_refresh_market_list(force_market)
 	_refresh_portfolio()
 	_refresh_chart()
+	_refresh_battle()
 
 
 func _refresh_nation() -> void:
@@ -830,23 +880,116 @@ func _note_battle(event: Dictionary) -> void:
 	if pid < 0:
 		return
 	var turn := int(event.get("turn", world.turn))
+	var na := int(event.get("nation", -1))
+	var nb := int(event.get("nation_b", -1))
 	if not _active_battles.has(pid):
 		_append_log(_prefix(turn) + "[color=#ff5964]전투[/color]  %s · %s ↔ %s" % [
-			_province_link(pid),
-			_nation_link(int(event.get("nation", -1))),
-			_nation_link(int(event.get("nation_b", -1)))])
-	_active_battles[pid] = turn
+			_province_link(pid), _nation_link(na), _nation_link(nb)])
+		_active_battles[pid] = {"start": turn, "losses": {}, "power": {}}
+	var battle: Dictionary = _active_battles[pid]
+	battle["last"] = turn
+	# 어느 쪽이 army_a 로 잡히는지는 턴마다 바뀐다. 국가 id 로 쌓아야 누적이 맞는다.
+	var losses: Dictionary = battle["losses"]
+	losses[na] = int(losses.get(na, 0)) + int(event.get("casualties_a", 0))
+	losses[nb] = int(losses.get(nb, 0)) + int(event.get("casualties_b", 0))
+	var power: Dictionary = battle["power"]
+	power[na] = float(event.get("power_a", 0.0))
+	power[nb] = float(event.get("power_b", 0.0))
 
 
 func _close_finished_battles() -> void:
 	var pids: Array = _active_battles.keys()
 	pids.sort()
 	for pid in pids:
+		var battle: Dictionary = _active_battles[pid]
 		# 이벤트의 turn 은 증가 전 값이다. 직전 턴까지 싸웠으면 아직 진행중이다.
-		if int(_active_battles[pid]) >= world.turn - 1:
+		if int(battle["last"]) >= world.turn - 1:
 			continue
 		_active_battles.erase(pid)
 		_append_log(_prefix(world.turn) + "전투 종료  %s" % _province_link(int(pid)))
+
+
+func _on_battle_selected(province_id: int) -> void:
+	battle_province = province_id
+	battle_panel.visible = true
+	_refresh_battle()
+
+
+func _close_battle() -> void:
+	battle_province = -1
+	battle_panel.visible = false
+
+
+## 교전 프로빈스에 서 있는 국가별 합계. 사기·보급은 병력 가중 평균이라 나눠 쓴다.
+func _battle_sides(pid: int) -> Dictionary:
+	var sides := {}
+	for army_id: int in world.armies_at(pid):
+		var army: Army = world.armies[army_id]
+		if not army.is_alive:
+			continue
+		var slot: Dictionary = sides.get(army.nation_id,
+			{"troops": 0, "morale": 0.0, "supply": 0.0})
+		slot["troops"] = int(slot["troops"]) + army.troops
+		slot["morale"] = float(slot["morale"]) + army.morale * army.troops
+		slot["supply"] = float(slot["supply"]) + army.supply_ratio * army.troops
+		sides[army.nation_id] = slot
+	return sides
+
+
+## [table] BBCode 는 비싸다(_stat 주석). 막대는 블록 문자로 그린다.
+func _bar(share: float) -> String:
+	var filled := clampi(int(round(share * 10.0)), 0, 10)
+	return "█".repeat(filled) + "░".repeat(10 - filled)
+
+
+func _refresh_battle() -> void:
+	if battle_province < 0:
+		return
+	if not _active_battles.has(battle_province):
+		_close_battle()
+		return
+	var pid := battle_province
+	var battle: Dictionary = _active_battles[pid]
+	var p: Province = world.provinces[pid]
+	battle_title.text = "⚔ 프로빈스 %03d · %d턴째" % [
+		pid, maxi(world.turn - int(battle["start"]), 1)]
+
+	var losses: Dictionary = battle["losses"]
+	var power: Dictionary = battle["power"]
+	var order: Array = losses.keys()
+	order.sort()
+	var total := 0.0
+	for nid: int in order:
+		total += maxf(float(power.get(nid, 0.0)), 0.0)
+
+	var live := _battle_sides(pid)
+	var lines := PackedStringArray()
+	for nid: int in order:
+		var strength := maxf(float(power.get(nid, 0.0)), 0.0)
+		var share := strength / total if total > 0.0 else 0.0
+		# 막대 색은 지도의 국가색과 같다. 그래야 패널과 마커가 같은 편으로 읽힌다.
+		var color: Color = map_renderer._nation_color(nid)
+		lines.append("%s  [color=#%s]%s[/color] %d%%" % [
+			_nation_name(nid), color.to_html(false), _bar(share),
+			int(round(share * 100.0))])
+		var slot: Dictionary = live.get(nid, {})
+		var troops := int(slot.get("troops", 0))
+		var detail := "  [color=#8fa2b5]전력[/color] %s · [color=#8fa2b5]병력[/color] %s" % [
+			_short(strength), _short(troops)]
+		if troops > 0:
+			detail += " · [color=#8fa2b5]사기[/color] %.2f · [color=#8fa2b5]보급[/color] %.2f" % [
+				float(slot["morale"]) / troops, float(slot["supply"]) / troops]
+		detail += " · [color=#8fa2b5]누적손실[/color] %s" % _short(float(losses[nid]))
+		lines.append(detail)
+
+	var terrain_names := ["평지", "구릉", "산악"]
+	lines.append(_stat("방어 이점", "%s ×%.2f (%s)" % [
+		terrain_names[p.terrain], WarAI.defense_mult(p), _nation_name(p.controller())]))
+	if p.siege_by_nation >= 0 and p.siege_progress > 0.0:
+		lines.append(_stat("공성", "%s %s %d%%" % [
+			_nation_name(p.siege_by_nation), _bar(p.siege_progress / 100.0),
+			int(p.siege_progress)]))
+	battle_detail.text = "\n".join(lines)
 
 
 func _event_text(event: Dictionary) -> String:

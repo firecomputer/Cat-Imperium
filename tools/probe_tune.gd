@@ -7,6 +7,11 @@ func _initialize() -> void:
 	var args := _parse_args(OS.get_cmdline_user_args())
 	var runs := int(args.get("runs", 6))
 	var turns := int(args.get("turns", 300))
+	var map_kind := MapSource.parse_kind(args.get("map-source", "noise"))
+	if map_kind < 0:
+		quit(2)
+		return
+	Diplomacy.debug_gates.clear()
 
 	var fail := {"infra_abs": 0, "infra_rel": 0, "pop": 0, "spacing": 0}
 	var infra_hist := PackedInt32Array([0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
@@ -23,7 +28,7 @@ func _initialize() -> void:
 	var end_reasons := {}
 
 	for i in range(runs):
-		var world := WorldState.create(1 + i)
+		var world := WorldState.create(1 + i, map_kind)
 		for t in range(turns):
 			SimClock.tick(world)
 		for p in world.provinces:
@@ -33,7 +38,7 @@ func _initialize() -> void:
 				continue
 			var n: Nation = world.nations[p.owner_nation]
 			var f_abs := p.infra < Economy.CITY_ABSOLUTE_MIN
-			var f_rel := p.infra < n.infra_mean + Economy.CITY_RELATIVE_BONUS
+			var f_rel := p.infra < n.infra_mean + Economy.CITY_RELATIVE_BONUS or not Economy.is_local_peak(world, p, n)
 			var f_pop := p.population < Economy.CITY_MIN_POP
 			var f_sp := Economy.nearest_city_distance(world, p, n) < Economy.CITY_MIN_SPACING
 			if f_abs: fail["infra_abs"] += 1
@@ -67,13 +72,13 @@ func _initialize() -> void:
 
 	print("=== 도시 게이트 (도시 없는 프로빈스 기준) ===")
 	print("프로빈스 %d, 도시 %d (평균 %.1f/런)" % [total_prov, cities, float(cities) / runs])
-	print("탈락 사유: infra<%.1f %d | infra<mean+%.1f %d | pop<%d %d | spacing %d"
-		% [Economy.CITY_ABSOLUTE_MIN, fail["infra_abs"], Economy.CITY_RELATIVE_BONUS,
+	print("탈락 사유: infra<%.1f %d | 평균미만·비봉우리 %d | pop<%d %d | spacing %d"
+		% [Economy.CITY_ABSOLUTE_MIN, fail["infra_abs"],
 		fail["infra_rel"], int(Economy.CITY_MIN_POP), fail["pop"], fail["spacing"]])
 	print("인구 조건 통과 %d" % pop_ok)
 	print("infra 히스토그램 0..9: %s" % str(infra_hist))
 	print("국가 인구가중 평균 인프라: %.2f" % (mean_infra_sum / maxf(nations_counted, 1)))
-	print("=== 전쟁 ===")
+	print("=== 전쟁 (%s) ===" % MapSource.kind_name(map_kind))
 	print("개전 게이트: %s" % str(Diplomacy.debug_gates))
 	print("대외전쟁 %d (%.1f/런), 반란전쟁 %d" % [foreign_wars, float(foreign_wars) / runs, rebellions])
 	print("종전 사유: %s" % str(end_reasons))

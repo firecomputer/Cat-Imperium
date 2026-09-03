@@ -15,6 +15,8 @@ func _initialize() -> void:
 	_test_general_effects_reach_army()
 	_test_default_halves_army_morale()
 	_test_military_share_follows_culture_and_desperation()
+	_test_military_investment_improves_quality_and_power()
+	_test_destroyed_main_force_needs_time_to_rebuild()
 	_test_standing_army_converges_to_gdp_share()
 	_test_conscription_law_caps_manpower()
 	_test_morale_returns_to_conscription_baseline()
@@ -58,14 +60,28 @@ func _test_city_is_secondary_source() -> void:
 	assert(field[15] > 0.3, "도시가 먼 황무지의 보급을 실질적으로 개선해야 한다")
 
 
+## M10.3 이 전투에 운(luck)을 넣은 뒤로 "결정론" 은 고정값이 아니라 *재현성* 이다.
+## 두 번 돌려 대조하고, 그 위에 기준값을 못 박는다 — 공식이 바뀌면 여기가 먼저 깨진다.
 func _test_lanchester_casualties_are_deterministic() -> void:
+	var first := _reference_battle()
+	var second := _reference_battle()
+	assert(first == second, "같은 시드는 같은 전투 결과를 낸다")
+	assert(first["casualties_a"] == 87 and first["casualties_b"] == 121,
+		"기준 전투 손실 (실제 %d / %d)" % [first["casualties_a"], first["casualties_b"]])
+	assert(first["troops_a"] == 1413 and first["troops_b"] == 879)
+	# 제곱 란체스터: 1.5배 전력차면 약한 쪽이 더 많이 잃는다.
+	assert(first["casualties_a"] < first["casualties_b"], "우세한 쪽이 덜 잃는다")
+
+
+func _reference_battle() -> Dictionary:
 	var world := _battle_world()
 	var a := Military.create_army(world, world.nations[0], 0, 1500)
 	var b := Military.create_army(world, world.nations[1], 1, 1000)
 	var result := Military.resolve_battle(world, a, b)
-	assert(result["casualties_a"] == 72)
-	assert(result["casualties_b"] == 72)
-	assert(a.troops == 1428 and b.troops == 928)
+	return {
+		"casualties_a": result["casualties_a"], "casualties_b": result["casualties_b"],
+		"troops_a": a.troops, "troops_b": b.troops,
+	}
 
 
 func _test_low_supply_attrition() -> void:
@@ -140,20 +156,71 @@ func _test_military_share_follows_culture_and_desperation() -> void:
 		"신용한도를 소진하면 군대부터 줄인다")
 
 
+func _test_military_investment_improves_quality_and_power() -> void:
+	var world := _battle_world()
+	var investor: Nation = world.nations[0]
+	var economizer: Nation = world.nations[1]
+	for n in [investor, economizer]:
+		n.population = 100000.0
+		n.gdp = 1000000.0
+		n.manpower = 0.0
+	investor.culture_params["aggression"] = 0.9
+	economizer.culture_params["aggression"] = 0.1
+	investor.at_foreign_war = true
+	economizer.at_foreign_war = true
+	var elite := Military.create_army(world, investor, 0, 1000)
+	var cheap := Military.create_army(world, economizer, 1, 1000)
+	Military.plan_spending(world, investor)
+	Military.plan_spending(world, economizer)
+	assert(Military.military_quality_target(investor)
+		> Military.military_quality_target(economizer),
+		"GDP 대비 군사 투자가 높으면 목표 장비·훈련 품질도 높아야 한다")
+	assert(elite.tech_level > cheap.tech_level,
+		"군사 투자 차이가 실제 Army.tech_level 누적으로 이어져야 한다")
+	# 병력 수 효과를 제거해도 투자한 군대가 더 강한지 확인한다.
+	elite.troops = 1000
+	cheap.troops = 1000
+	assert(Military.combat_power(world, elite) > Military.combat_power(world, cheap),
+		"같은 병력이라도 더 투자한 군대가 전투에서 우세해야 한다")
+
+
+func _test_destroyed_main_force_needs_time_to_rebuild() -> void:
+	var world := _battle_world()
+	var n: Nation = world.nations[0]
+	n.population = 100000.0
+	n.gdp = 1000000.0
+	n.culture_params["aggression"] = 0.9
+	n.manpower = 0.0
+	var main := Military.create_army(world, n, 0, 2000)
+	Military.destroy_army(world, main, "test_annihilation")
+	assert(n.military_readiness <= Military.CATASTROPHIC_READINESS,
+		"주력군 전멸은 국가 전투준비도를 붕괴시켜야 한다")
+	var target := Military.target_troops(n)
+	Military.plan_spending(world, n)
+	assert(Military.total_troops(world, n) < int(target * 0.07),
+		"전멸 직후에는 평시 12% 속도로 군대를 즉시 재건하면 안 된다")
+	for i in range(20):
+		Military.plan_spending(world, n)
+	assert(n.military_readiness < 0.70,
+		"주력군 전멸 충격은 수십 턴 동안 전투력에 남아야 한다")
+
+
 func _test_standing_army_converges_to_gdp_share() -> void:
 	var world := _battle_world()
 	var n: Nation = world.nations[0]
 	n.population = 100000.0
 	n.gdp = 1000000.0
 
-	# 1인당 GDP 10 × 4.0 = 병사 단가 40, 목표 = GDP × 3.7% / 40 = 925.
+	# 병사 단가 40에 품질 유지비를 더해 목표 907명으로 수렴한다. 첫 턴 증병은
+	# 12% × 기본 지지도(0.7)의 동원 배율 1.06 이다 (M14 §4).
 	var cost := Military.plan_spending(world, n)
-	assert(Military.total_troops(world, n) == 111, "한 턴 증병은 목표의 12%로 제한된다")
-	assert(absf(cost - 11100.0) < 0.5, "군사비 = 유지비 + 모집비")
+	assert(Military.total_troops(world, n) == 115,
+		"한 턴 증병은 목표의 12% × 지지도 동원 배율로 제한된다")
+	assert(absf(cost - 12218.75) < 0.5, "군사비 = 유지비 + 모집비 + 훈련비")
 
 	for i in range(60):
 		Military.plan_spending(world, n)
-	assert(Military.total_troops(world, n) == 925, "병력은 목표치로 수렴한다")
+	assert(Military.total_troops(world, n) == 907, "병력은 품질 비용을 포함한 목표치로 수렴한다")
 	var steady := Military.plan_spending(world, n)
 	assert(absf(steady / n.gdp - BudgetAI.military_share(n)) < 0.001,
 		"수렴 후 군사비는 정확히 GDP 비율이다")
@@ -161,16 +228,16 @@ func _test_standing_army_converges_to_gdp_share() -> void:
 	# 재정난이 오면 AI 가 스스로 병력을 줄인다 (§0.3).
 	n.debt = Credit.credit_limit(n)
 	Military.plan_spending(world, n)
-	assert(Military.total_troops(world, n) < 925, "재정난은 군대를 먼저 깎는다")
+	assert(Military.total_troops(world, n) < 907, "재정난은 군대를 먼저 깎는다")
 
 
 func _test_conscription_law_caps_manpower() -> void:
 	var n := _economy_nation(0.9)
 	n.population = 100000.0
 	var base := Military.manpower_cap(n)
-	n.laws["conscription"] = _law("conscription", {"manpower": 0.4})
+	n.set_law("conscription", _law("conscription", {"manpower": 0.4}))
 	var levy := Military.manpower_cap(n)
-	n.laws["conscription"] = _law("conscription", {"manpower": -0.25})
+	n.set_law("conscription", _law("conscription", {"manpower": -0.25}))
 	var volunteer := Military.manpower_cap(n)
 	assert(is_equal_approx(base, 2500.0))
 	assert(is_equal_approx(levy, 3500.0) and is_equal_approx(volunteer, 1875.0))
@@ -185,7 +252,7 @@ func _test_conscription_law_caps_manpower() -> void:
 func _test_morale_returns_to_conscription_baseline() -> void:
 	var world := _battle_world()
 	var n: Nation = world.nations[0]
-	n.laws["conscription"] = _law("conscription", {"army_morale": -0.1})
+	n.set_law("conscription", _law("conscription", {"army_morale": -0.1}))
 	n.supply_field = PackedFloat32Array([1.0, 1.0])
 	var army := Military.create_army(world, n, 0, 1000)
 	army.morale = 0.4
@@ -221,6 +288,7 @@ func _target_supply(world: WorldState) -> float:
 func _chain_world(steps: int, infra: float, terrain_supply: float = 1.0,
 		unrest: float = 0.0) -> WorldState:
 	var world := WorldState.new()
+	world.rng_pool = RngPool.new(107)
 	var n := Nation.new()
 	n.id = 0
 	n.capital = 0
@@ -243,6 +311,7 @@ func _chain_world(steps: int, infra: float, terrain_supply: float = 1.0,
 
 func _battle_world() -> WorldState:
 	var world := WorldState.new()
+	world.rng_pool = RngPool.new(108)
 	for i in range(2):
 		var n := Nation.new()
 		n.id = i

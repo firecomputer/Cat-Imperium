@@ -8,8 +8,16 @@ var world_seed: int = 0
 var turn: int = 0
 var rng_pool: RngPool
 
+var map_source_kind: int = MapSource.Kind.EARTH
+var map_source_name: String = "earth"
+var map_width: int = 0
+var map_height: int = 0
 var land: PackedByteArray
 var elevation: PackedFloat32Array
+var land_coverage: PackedByteArray
+var tile_longitude: PackedFloat32Array
+var tile_latitude: PackedFloat32Array
+var tile_region: PackedByteArray
 var features: PackedInt32Array
 var sea_basin: PackedInt32Array
 ## 해역 분할 (M9.2). 타일 → 해역 id, 육지는 -1.
@@ -27,6 +35,10 @@ var wars: Array[War] = []
 var portfolio: PlayerPortfolio
 
 var map_attempts: int = 0
+## 건국 시점 국가 수. 국가 수는 지도 크기를 따라가므로(NationPlacer.nation_count)
+## 제국 문턱 같은 "평균국 대비" 지표가 이 값을 나눠 쓴다. 반란국이 늘어난 뒤에도
+## 기준은 건국 시점이다.
+var initial_nation_count: int = 0
 
 ## 해역 id → 그 바다에 해안을 가진 국가 id 집합. 매 턴 1회만 만든다.
 var zone_coast_nations: Dictionary = {}
@@ -55,33 +67,50 @@ var events: Array[Dictionary] = []
 
 
 ## 지형 → 프로빈스 → 국가 → 초기값 순으로 세계를 만든다.
-static func create(world_seed: int) -> WorldState:
+static func create(world_seed: int, requested_map_source: int = -1) -> WorldState:
 	var w := WorldState.new()
 	w.world_seed = world_seed
 	w.rng_pool = RngPool.new(world_seed)
 	w.portfolio = PlayerPortfolio.new()
 
-	var map := MapGenerator.generate(world_seed)
+	var map_kind := requested_map_source if requested_map_source >= 0 else MapSource.default_kind()
+	var map := MapSource.create_map(world_seed, map_kind)
+	w.map_source_kind = map_kind
+	w.map_source_name = map["source"]
+	w.map_width = map["width"]
+	w.map_height = map["height"]
 	w.land = map["land"]
 	w.elevation = map["elevation"]
+	w.land_coverage = map["land_coverage"]
+	w.tile_longitude = map["longitude"]
+	w.tile_latitude = map["latitude"]
+	w.tile_region = map["regions"]
 	w.map_attempts = map["attempts"]
 
-	var nbr := MapGenerator.neighbor_cache()
-	var tagged := FeatureTagger.tag(w.land, nbr)
+	var nbr := MapSource.neighbor_cache(w.map_width, w.map_height)
+	var tagged := FeatureTagger.tag(w.land, nbr, map["forced_features"],
+		float(map.get("granularity", 1.0)))
 	w.features = tagged["features"]
 	w.sea_basin = tagged["sea_basin"]
+	tagged["country"] = map.get("country", PackedInt32Array())
+	tagged["regions"] = w.tile_region
+	tagged["longitude"] = w.tile_longitude
+	tagged["latitude"] = w.tile_latitude
 
 	# 프로빈스가 어느 해역에 접했는지를 알아야 하므로 바다부터 쪼갠다.
 	var sea := SeaSplitter.split(w.land, w.sea_basin, w.features,
-		w.rng_pool.get_rng("sea_split"))
+		w.rng_pool.get_rng("sea_split"), w.map_width, nbr,
+		float(map.get("granularity", 1.0)))
 	w.sea_zones = sea["zones"]
 	w.tile_zone = sea["tile_zone"]
 	tagged["sea_zone"] = w.tile_zone
 
 	w.provinces = ProvinceSplitter.split(w.land, w.elevation, tagged,
-		w.rng_pool.get_rng("province_split"))
-	w.nations = NationPlacer.place(w.provinces, w.rng_pool.get_rng("nation_placer"))
+		w.rng_pool.get_rng("province_split"), w.map_width, nbr)
+	w.nations = NationPlacer.place(w.provinces, w.rng_pool.get_rng("nation_placer"),
+		float(map.get("granularity", 1.0)), w.rng_pool.get_rng("culture_placement"))
 	NationPlacer.assign_names(w.nations, w.rng_pool.get_rng("nation_names"))
+	w.initial_nation_count = w.nations.size()
 
 	# 프로빈스는 건국 시 지배국의 문화를 갖는다. 정복해도 이 값은 남아
 	# 문화 거리가 정복지 불만의 항구적 원천이 된다 (§10).

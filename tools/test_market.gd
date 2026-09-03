@@ -94,7 +94,7 @@ func _test_history_records_after_tick() -> void:
 
 
 func _test_full_world_integration() -> void:
-	var world := WorldState.create(7)
+	var world := WorldState.create(7, MapSource.Kind.NOISE)
 	var nation_id := 0
 	var province_id: int = world.nations[nation_id].capital
 	var character_id: int = world.nations[nation_id].characters[0]
@@ -109,6 +109,7 @@ func _test_full_world_integration() -> void:
 
 func _world() -> WorldState:
 	var world := WorldState.new()
+	world.rng_pool = RngPool.new(110)
 	world.portfolio = PlayerPortfolio.new()
 
 	var n := Nation.new()

@@ -31,7 +31,9 @@ static func character_stake_price(c: Character, turn: int) -> float:
 
 
 static func growth_headroom(p: Province) -> float:
-	var anchor := Economy.gdp_pc_anchor(p.infra)
+	# 생산 틱이 실제로 사용한 지리 상한·법률·교역 포함 앵커를 읽는다.
+	# 원시 gdp_pc_anchor(infra)를 다시 계산하면 지역별 상한 도입 뒤 다른 경제를 본다.
+	var anchor := p.anchor_gdp_pc
 	if anchor <= 0.0:
 		return 0.0
 	return (anchor - p.gdp_pc) / anchor

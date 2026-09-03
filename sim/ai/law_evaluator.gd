@@ -20,13 +20,25 @@ const OCCUPATION_EXPOSURE_W := 8.0
 static func evaluate(n: Nation, law: Law) -> float:
 	var d := desperation(n)
 	var score := 0.0
-	score += law.modifier("immediate_income") * (1.0 + d * 4.0)
-	score += law.modifier("stability") * (1.0 - d * 0.8)
-	score += law.modifier("long_term_growth") * (1.0 - d)
+	# 점령법의 효과는 전부 미통합 정복지에서만 나온다 (Economy.occupation_extraction,
+	# Unrest 의 점령 항, EmpireSystem 의 통합 배율 — 셋 다 Province.occupation_base).
+	# 그 밑변을 곱하지 않으면 정복지가 없는 나라까지 점령법이 손익을 갖는다.
+	# 셋 중 income 만 깎으면 반대로 기울어진다: 약탈은 수익을 잃고 감점만 남는데
+	# 자치는 비용만 잃고 stability +0.5 를 그대로 챙겨, 온 세계가 자치로 쏠린다
+	# (실측 프로빈스 5개 이상 201개국 중 약탈 0). 세 힌트를 같은 밑변으로 줄인다.
+	var scale := occupation_yield_share(n) if law.category == "occupation" else 1.0
+	score += law.modifier("immediate_income") * scale * (1.0 + d * 4.0)
+	score += law.modifier("stability") * scale * (1.0 - d * 0.8)
+	score += law.modifier("long_term_growth") * scale * (1.0 - d)
 	score += culture_bias_for_law(n, law)
 	if law.category == "occupation":
 		score -= law.severity * n.foreign_exposure * OCCUPATION_EXPOSURE_W
 	return score
+
+
+## 점령 수취가 걸리는 GDP 비율. 이 값이 0 이면 점령법은 순수 비용이다.
+static func occupation_yield_share(n: Nation) -> float:
+	return clampf(n.occupation_gdp / maxf(n.gdp, 1.0), 0.0, 1.0)
 
 
 ## 문화 설정을 법률 선호로 번역하는 통로. 같은 재정 상태라도 품종마다 다른 법을 고른다.

@@ -5,16 +5,22 @@ class_name SeaSplitter extends RefCounted
 
 const TARGET_MIN := 60
 const TARGET_MAX := 130
-const AVG_TARGET := 90.0          # 바다 10,000 타일 → 해역 약 110개
+const AVG_TARGET := 90.0          # 기준 격자 바다 10,000 타일 → 해역 약 110개
 const SEED_MIN_DIST := 6
 const SEED_TRIES_PER_SEED := 40
 
 
+## ProvinceSplitter 와 같은 granularity 배율을 쓴다.
+static func target_max(granularity: float) -> int:
+	return int(round(TARGET_MAX * granularity))
+
+
 ## 반환: {"zones": Array[SeaZone], "tile_zone": PackedInt32Array}  (육지는 -1)
 static func split(land: PackedByteArray, sea_basin: PackedInt32Array,
-		features: PackedInt32Array, rng: RandomNumberGenerator) -> Dictionary:
-	var nbr := MapGenerator.neighbor_cache()
+		features: PackedInt32Array, rng: RandomNumberGenerator,
+		width: int, nbr: Array, granularity: float = 1.0) -> Dictionary:
 	var total := land.size()
+	var cap := target_max(granularity)
 
 	var assigned := PackedInt32Array()
 	assigned.resize(total)
@@ -27,7 +33,7 @@ static func split(land: PackedByteArray, sea_basin: PackedInt32Array,
 	basins.sort()                                 # 결정론 (§15)
 	for basin in basins:
 		var tiles: Array = basin_tiles[basin]
-		if tiles.size() <= TARGET_MAX:
+		if tiles.size() <= cap:
 			var zid := sizes.size()
 			sizes.append(0)
 			zone_basin.append(int(basin))
@@ -35,7 +41,7 @@ static func split(land: PackedByteArray, sea_basin: PackedInt32Array,
 				assigned[t] = zid
 				sizes[zid] += 1
 			continue
-		_grow(tiles, int(basin), sea_basin, nbr, assigned, sizes, zone_basin, rng)
+		_grow(tiles, int(basin), sea_basin, nbr, assigned, sizes, zone_basin, rng, width, granularity)
 
 	for basin in basins:
 		_absorb_orphans(basin_tiles[basin], int(basin), sea_basin, nbr, assigned, sizes)
@@ -43,7 +49,7 @@ static func split(land: PackedByteArray, sea_basin: PackedInt32Array,
 			zone_basin.append(int(basin))
 
 	return {
-		"zones": _build_zones(assigned, sizes, zone_basin, features, nbr),
+		"zones": _build_zones(assigned, sizes, zone_basin, features, nbr, width),
 		"tile_zone": assigned,
 	}
 
@@ -64,8 +70,10 @@ static func _tiles_by_basin(sea_basin: PackedInt32Array, total: int) -> Dictiona
 
 static func _grow(tiles: Array, basin: int, sea_basin: PackedInt32Array, nbr: Array,
 		assigned: PackedInt32Array, sizes: Array[int], zone_basin: Array[int],
-		rng: RandomNumberGenerator) -> void:
-	var seeds := _poisson_seeds(tiles, rng)
+		rng: RandomNumberGenerator, width: int, granularity: float) -> void:
+	var seeds := _poisson_seeds(tiles, rng, width, granularity)
+	var target_lo := int(round(TARGET_MIN * granularity))
+	var target_hi := int(round(TARGET_MAX * granularity))
 
 	var local_ids: Array[int] = []
 	var frontier: Array = []
@@ -79,7 +87,7 @@ static func _grow(tiles: Array, basin: int, sea_basin: PackedInt32Array, nbr: Ar
 		local_ids.append(zid)
 		frontier.append(_expandable(s, basin, sea_basin, nbr, assigned))
 		head.append(0)
-		target.append(rng.randi_range(TARGET_MIN, TARGET_MAX))
+		target.append(rng.randi_range(target_lo, target_hi))
 
 	var progressed := true
 	while progressed:
@@ -111,18 +119,20 @@ static func _expandable(from: int, basin: int, sea_basin: PackedInt32Array, nbr:
 	return out
 
 
-static func _poisson_seeds(tiles: Array, rng: RandomNumberGenerator) -> Array[int]:
-	var want := maxi(1, int(round(tiles.size() / AVG_TARGET)))
+static func _poisson_seeds(tiles: Array, rng: RandomNumberGenerator, width: int,
+		granularity: float) -> Array[int]:
+	var want := maxi(1, int(round(tiles.size() / (AVG_TARGET * granularity))))
+	var min_dist := int(round(SEED_MIN_DIST * sqrt(granularity)))
 	var seeds: Array[int] = []
 	var seed_coords: Array[Vector2i] = []
 	var tries := want * SEED_TRIES_PER_SEED
 	while seeds.size() < want and tries > 0:
 		tries -= 1
 		var t: int = tiles[rng.randi_range(0, tiles.size() - 1)]
-		var c := Vector2i(t % MapGenerator.W, t / MapGenerator.W)
+		var c := Vector2i(t % width, t / width)
 		var ok := true
 		for other in seed_coords:
-			if Hex.distance(c.x, c.y, other.x, other.y) < SEED_MIN_DIST:
+			if Hex.distance(c.x, c.y, other.x, other.y) < min_dist:
 				ok = false
 				break
 		if ok:
@@ -174,7 +184,8 @@ static func _absorb_orphans(tiles: Array, basin: int, sea_basin: PackedInt32Arra
 # ---------------------------------------------------------------- 해역 객체 구성
 
 static func _build_zones(assigned: PackedInt32Array, sizes: Array[int],
-		zone_basin: Array[int], features: PackedInt32Array, nbr: Array) -> Array[SeaZone]:
+		zone_basin: Array[int], features: PackedInt32Array, nbr: Array,
+		width: int) -> Array[SeaZone]:
 	var zones: Array[SeaZone] = []
 	var tile_lists: Array = []
 	for i in range(sizes.size()):
@@ -195,7 +206,7 @@ static func _build_zones(assigned: PackedInt32Array, sizes: Array[int],
 		var sum_pos := Vector2.ZERO
 		var neighbors := {}
 		for t in z.tiles:
-			sum_pos += Hex.to_plane(t % MapGenerator.W, t / MapGenerator.W)
+			sum_pos += Hex.to_plane(t % width, t / width)
 			if features[t] == FeatureTagger.Feature.STRAIT:
 				z.is_strait = true
 			for n: int in nbr[t]:
@@ -208,7 +219,7 @@ static func _build_zones(assigned: PackedInt32Array, sizes: Array[int],
 		z.centroid = mean
 		var best := INF
 		for t in z.tiles:
-			var pos := Hex.to_plane(t % MapGenerator.W, t / MapGenerator.W)
+			var pos := Hex.to_plane(t % width, t / width)
 			var distance := pos.distance_squared_to(mean)
 			if distance < best:
 				best = distance

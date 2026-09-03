@@ -42,6 +42,12 @@ var creativity: float = 0.0
 var role: int = Role.NONE
 var loyalty: float = 0.5
 var ambition: float = 0.0
+## 매파 성향 (0~1). 정치 고문석에 앉으면 국가의 개전 성향이 된다 — 같은 위협을
+## 기회로 읽고, 같은 전력차에서 더 밀어붙인다. 0.5 가 중립이다.
+var hawkish: float = 0.5
+## 강제 진압 선호 (0~1). 정치 고문석에 앉으면 국가의 진압 의지가 된다 — 낮으면
+## 분리주의가 높은 땅을 군대로 누르지 않고 방치한다. 0.5 가 중립이다.
+var suppression_bias: float = 0.5
 var noble_birth: float = 0.0
 var home_province: int = -1
 var education_at_birth: float = 0.0

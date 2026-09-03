@@ -35,10 +35,17 @@ static func declare_war(world: WorldState, attacker: Nation, defender: Nation,
 	war.primary_attacker = attacker.id
 	war.primary_defender = defender.id
 	war.goal = goal
-	war.goal_score = Peace.SUBJUGATION_SCORE if goal == War.Goal.SUBJUGATION \
-		else Peace.ACCEPT_SCORE
+	match goal:
+		War.Goal.SUBJUGATION:
+			war.goal_score = Peace.SUBJUGATION_SCORE
+		War.Goal.INDEPENDENCE:
+			war.goal_score = Peace.INDEPENDENCE_SCORE
+		_:
+			war.goal_score = Peace.CONQUEST_SETTLE_SCORE
 	war.attackers = [attacker.id]
 	war.defenders = [defender.id]
+	war.start_provinces[attacker.id] = PackedInt32Array(attacker.provinces)
+	war.start_provinces[defender.id] = PackedInt32Array(defender.provinces)
 	world.wars.append(war)
 	attacker.wars.append(war.id)
 	defender.wars.append(war.id)
@@ -64,6 +71,7 @@ static func join_war(world: WorldState, war: War, n: Nation, side: int,
 		war.attackers.append(n.id)
 	else:
 		war.defenders.append(n.id)
+	war.start_provinces[n.id] = PackedInt32Array(n.provinces)
 	n.wars.append(war.id)
 	n.at_war = true
 	n.supply_dirty = true
@@ -148,8 +156,14 @@ const THREAT_SMOOTH := 0.25
 const EXPANSION_SMOOTH := 0.3
 const EXPANSION_WEIGHT := 1.5
 
-const WEARINESS_PER_WAR_TURN := 0.010
-const WEARINESS_RECOVERY := 0.020
+# ---------------------------------------------------------------- 전쟁 지지도 (M14 §4)
+## 평시 회복. 3턴에 1%p — 0 에서 개전 가능선(0.40)까지 120턴이다. 전쟁을 크게
+## 말아먹은 나라는 한 세대 동안 다시 나서지 못한다.
+const WAR_SUPPORT_PEACE_GAIN := 1.0 / 300.0
+## 이 아래로 떨어지면 선전포고 자체가 불가능하다.
+const WAR_SUPPORT_FLOOR := 0.40
+## 지지도가 만점인 채로 이만큼 평화가 이어지면 개전 문턱을 무시한다.
+const WAR_SUPPORT_CRUSADE_TURNS := 15
 
 ## 동맹은 호감이 아니라 공포로 맺어진다 (§11.2 밸런스 오브 파워).
 ## opinion 은 동맹 체결 여부를 조절하는 다이얼이 못 된다 — 이력 없는 쌍의
@@ -186,14 +200,30 @@ const IMPERIAL_MOMENTUM_WEIGHT := 0.80     # 승전 권위가 다음 확장의 �
 const VASSAL_MOMENTUM := 0.08              # 첫 속국 이후 확장이 승전국에 집중되게 한다
 const WAR_COOLDOWN := 8                   # 한 나라가 연달아 선전포고하지 못하게
 ## 문턱이 0 이면 국경만 맞대면 계속 전쟁이 난다 — 전시 군사비(×2)가 상시화되어
-## 모든 나라가 40턴 만에 파산했다. 확실한 우세와 확실한 동기를 둘 다 요구한다.
-## 0.25 에서는 자격 있는 국가-턴의 99.86% 가 표적 0 이 되어 정복이 거의 안 난다.
-## 0.12 로 내려 보면 병합이 61 -> 97 로 늘지만 첫 파산이 100턴 전인 시드가
-## 7/18 -> 14/20 으로 뛴다. 이득 대비 비용이 나빠 0.25 를 유지한다.
-## 여기서 더 늘리려면 상수가 아니라 §12.2 조항 수확(강화조약당 1 프로빈스)을 손봐야 한다.
-const WAR_THRESHOLD := 0.25
-const WAR_POWER_EDGE := 1.15              # 상대보다 이만큼 강해야 친다
-const IMPERIAL_WAR_POWER_EDGE := 0.75      # 형성기 제국은 불리한 연합전도 감수한다
+## 모든 나라가 40턴 만에 파산했다. 전력 조건과 별개로 확실한 동기는 유지한다.
+## 단일 문턱 0.25 에서는 자격 있는 국가-턴의 거의 전부가 표적 0 이 됐다. 전역
+## 문턱을 0.12 로 내린 옛 실험은 모두가 함께 싸워 파산만 늘렸다. 따라서 신중국은
+## 오히려 0.30 을 요구하고, 호전적 문화·매파 내각·연승국만 0.05 쪽으로 내려간다.
+const WAR_THRESHOLD_CAUTIOUS := 0.30
+const WAR_THRESHOLD_BOLD := 0.05
+## 전투 전에 이미 15% 우세해야 한다는 예전 단일 조건은 비슷한 국가가 많은
+## 세계에서 전쟁 자체를 막았다. 반대로 모두에게 넓은 열세 허용폭을 주자 600턴 전쟁은
+## 81→104건으로 늘었지만 병합은 32→28건으로 줄었다. 전 세계가 똑같이 소모하면
+## 승자가 생기지 않는다. 모든 국가는 동급국까지는 후보로 삼되, 호전적 문화와
+## 매파 내각만 20% 안팎의 열세까지 감수하게 해 전쟁량을 일부 국가에 모은다.
+const WAR_POWER_FLOOR_CAUTIOUS := 0.95
+const WAR_POWER_FLOOR_BOLD := 0.80
+const WAR_RISK_AGGRESSION_WEIGHT := 0.65
+const WAR_RISK_HAWK_WEIGHT := 0.35
+const WAR_VICTORY_MOMENTUM_AUTHORITY := 0.30
+const WAR_DISADVANTAGE_PENALTY_CAUTIOUS := 1.25
+const WAR_DISADVANTAGE_PENALTY_BOLD := 0.45
+## 매파 내각의 값 (§인재 편차). 개전 의욕뿐 아니라 감수할 수 있는 전력비도 정한다.
+const WAR_HAWK_APPETITE := 0.30
+## 개전 판정의 흔들림. 중간 성향 문턱 대비 약 1/3 이라 명백한 전쟁은 그대로
+## 나고 아슬아슬한 판만 뒤집힌다. 같은 세계를 두 번 돌리면 같은 전쟁이 난다.
+const WAR_APPETITE_SIGMA := 0.06
+const IMPERIAL_WAR_POWER_FLOOR := 0.65     # 연승국도 절반 가까이 강한 적에게는 덤비지 않는다
 const IMPERIAL_EXPANSION_AUTHORITY := 0.50
 const SUBJUGATION_POWER_EDGE := 1.30      # 우세가 분명하면 영토보다 종속을 노린다
 ## 프로빈스 1~2개짜리 파편을 속국으로 두면 행정부하(VASSAL_ADMIN_SHARE)만 늘고
@@ -206,7 +236,7 @@ const WAR_DEBT_CEILING := 0.9             # 신용한도를 이만큼 넘게 쓴
 const WAR_AUTHORITY_FLOOR := 0.25          # 권위가 무너진 국가는 새 원정을 벌이지 못한다
 ## 건국 직후에는 상비군도 인프라도 세수 기반도 없다. 이 시기의 전쟁은
 ## 승패와 무관하게 양쪽을 파산시키기만 해서 M5 기준을 깨뜨렸다.
-const WAR_MIN_TURN := 40
+const WAR_MIN_TURN := 55
 
 
 static func tick(world: WorldState) -> void:
@@ -235,10 +265,14 @@ static func _update_self(world: WorldState, n: Nation) -> void:
 	var growth := float(size - n.prev_province_count) / maxf(n.prev_province_count, 1.0)
 	n.expansion_rate = lerpf(n.expansion_rate, growth, EXPANSION_SMOOTH)
 	n.prev_province_count = size
+	# 지지도는 전시에 사상자로만 깎인다 (Military._register_force_loss). 여기서는
+	# 평시 회복과 "만족한 평화가 얼마나 오래 이어졌는가"만 센다.
 	if n.at_war:
-		n.war_weariness = minf(n.war_weariness + WEARINESS_PER_WAR_TURN, 1.0)
+		n.peace_streak_turns = 0
 	else:
-		n.war_weariness = maxf(n.war_weariness - WEARINESS_RECOVERY, 0.0)
+		n.war_support = minf(n.war_support + WAR_SUPPORT_PEACE_GAIN, 1.0)
+		n.peace_streak_turns = n.peace_streak_turns + 1 \
+			if n.war_support >= 1.0 else 0
 	for other_id in n.truces.keys():
 		if int(n.truces[other_id]) <= world.turn:
 			n.truces.erase(other_id)
@@ -246,7 +280,7 @@ static func _update_self(world: WorldState, n: Nation) -> void:
 
 ## 전력. 육군이 주력이고 해군은 투사력으로만 절반 친다.
 static func power(world: WorldState, n: Nation) -> float:
-	var land := Military.total_troops(world, n) * n.army_modifier * n.military_modifier
+	var land := Military.strategic_power(world, n)
 	var sea := Naval.total_ships(world, n) * n.navy_modifier * 0.5
 	return land + sea
 
@@ -336,18 +370,27 @@ static func war_appetite(world: WorldState, n: Nation, target_id: int) -> float:
 	var target: Nation = world.nations[target_id]
 	var threat := float(n.threat.get(target_id, 0.0))
 	var restraint := float(n.opinion.get(target_id, 0.0)) / 100.0
-	restraint += n.war_weariness
+	restraint += 1.0 - n.war_support
 	restraint += deterrence(world, n, target)
 	restraint += float(n.interest.get(target_id, 0.0)) * 0.3
 	restraint -= (n.culture_bias("aggression") - 0.5) * AGGRESSION_SPAN
 	var mine := maxf(realm_power(world, n, true), 1.0)
-	var edge := clampf(1.0 - _defended_power(world, target) / mine, 0.0, 0.75)
+	var defended := _defended_power(world, target)
+	var edge := clampf(1.0 - defended / mine, 0.0, 0.75)
 	var opportunity := edge * (0.40 + n.culture_bias("aggression") * 0.60) \
 		* OPPORTUNITY_WEIGHT * (0.35 + n.imperial_authority)
 	if EmpireSystem.realm_province_count(world, target) <= FRAGMENT_MAX_SIZE:
 		opportunity += FRAGMENT_APPETITE * (0.4 + n.culture_bias("aggression") * 0.6)
 	var momentum := maxf(n.imperial_authority - 0.5, 0.0) * IMPERIAL_MOMENTUM_WEIGHT
 	momentum += minf(n.vassals.size() * VASSAL_MOMENTUM, 0.24)
+	momentum += (n.war_hawk - 0.5) * WAR_HAWK_APPETITE
+	# 전력 열세는 금지 사유가 아니라 정치적 부담이다. 동급(비율 1)은 페널티가
+	# 없고, 열세가 커질수록 신중국이 훨씬 빨리 물러난다. 방어동맹 억지력은 위의
+	# deterrence 항에도 따로 잡히므로 연합을 가볍게 공격하지는 않는다.
+	var disadvantage := maxf(defended / mine - 1.0, 0.0)
+	var disadvantage_weight := lerpf(WAR_DISADVANTAGE_PENALTY_CAUTIOUS,
+		WAR_DISADVANTAGE_PENALTY_BOLD, war_risk(n))
+	restraint += disadvantage * disadvantage_weight
 	return threat + opportunity + momentum - restraint
 
 
@@ -392,8 +435,15 @@ static func _consider_war(world: WorldState, n: Nation) -> void:
 	if world.turn - n.last_war_turn < WAR_COOLDOWN:
 		_gate("blocked_cooldown")
 		return
+	if n.war_support < WAR_SUPPORT_FLOOR:
+		_gate("blocked_support")
+		return
+	# 만점 지지도가 오래 놀고 있으면 전쟁은 선택이 아니라 귀결이다. 문턱만 지우고
+	# 휴전·동맹·자금·권위·쿨다운·전력비 안전장치는 그대로 둔다 — 자살적 개전까지
+	# 열어 주면 소국이 먼저 사라져 제국이 오히려 편해진다.
+	var crusade := n.peace_streak_turns >= WAR_SUPPORT_CRUSADE_TURNS
 	var best := -1
-	var best_score := WAR_THRESHOLD
+	var best_score := -INF if crusade else war_threshold(n)
 	var contact := _border_contact(world, n)
 	var my_power := realm_power(world, n, true)
 	_gate("eligible")
@@ -406,13 +456,14 @@ static func _consider_war(world: WorldState, n: Nation) -> void:
 		if target_id in n.allies:
 			_gate("t_ally")
 			continue
-		var required_edge := IMPERIAL_WAR_POWER_EDGE if not n.vassals.is_empty() \
-			and n.imperial_authority >= IMPERIAL_EXPANSION_AUTHORITY else WAR_POWER_EDGE
-		if my_power < _defended_power(world, m) * required_edge:
+		var power_floor := IMPERIAL_WAR_POWER_FLOOR if not n.vassals.is_empty() \
+			and n.imperial_authority >= IMPERIAL_EXPANSION_AUTHORITY else war_power_floor(n)
+		if my_power < _defended_power(world, m) * power_floor:
 			_gate("t_power")
 			continue                      # 이길 자신이 없으면 시작하지 않는다
 		_gate("t_candidate")
-		var score := war_appetite(world, n, target_id)
+		var score := war_appetite(world, n, target_id) \
+			+ world.rng_pool.get_rng("war_appetite").randfn(0.0, WAR_APPETITE_SIGMA)
 		if score > best_score:
 			best_score = score
 			best = target_id
@@ -421,12 +472,45 @@ static func _consider_war(world: WorldState, n: Nation) -> void:
 	if best < 0:
 		return
 	n.last_war_turn = world.turn
+	if crusade:
+		world.log_event("crusade_declared", {
+			"nation": n.id,
+			"defender": best,
+			"peace_turns": n.peace_streak_turns,
+		})
+	n.peace_streak_turns = 0
 	var target: Nation = world.nations[best]
 	var goal := _choose_war_goal(world, n, target, my_power)
 	var war := declare_war(world, n, target, "threat", goal)
 	target.opinion[n.id] = OPINION_MIN
 	EmpireSystem.call_vassals_to_war(world, war, n, 1, true)
 	_call_allies(world, war, target)
+
+
+## 전력비 하한은 동급국(1.0)까지는 모두 허용하고, 0이면 35% 열세, 1이면
+## 20% 열세까지 위험을 감수한다. 문화만으로 고정하지 않고 내각을 섞어 같은
+## 문화 안에서도 정복국과 신중국이 갈리게 한다.
+static func war_power_floor(n: Nation) -> float:
+	var risk := war_risk(n)
+	var floor := lerpf(WAR_POWER_FLOOR_CAUTIOUS, WAR_POWER_FLOOR_BOLD, risk)
+	# 정복전 승리마다 권위가 +0.08 오른다. 평화로운 국가는 0.5 부근에 머무르므로
+	# 이 보정은 승전국에만 다음 전쟁을 열어 주고, 전쟁량을 세계 전체가 아니라
+	# 이미 입증된 승자에게 집중한다. 권위 0.8에서 제국권 안전선에 도달한다.
+	var momentum := clampf((n.imperial_authority - 0.5) \
+		/ WAR_VICTORY_MOMENTUM_AUTHORITY, 0.0, 1.0)
+	return lerpf(floor, IMPERIAL_WAR_POWER_FLOOR, momentum)
+
+
+static func war_threshold(n: Nation) -> float:
+	var threshold := lerpf(WAR_THRESHOLD_CAUTIOUS, WAR_THRESHOLD_BOLD, war_risk(n))
+	var momentum := clampf((n.imperial_authority - 0.5) \
+		/ WAR_VICTORY_MOMENTUM_AUTHORITY, 0.0, 1.0)
+	return lerpf(threshold, WAR_THRESHOLD_BOLD, momentum)
+
+
+static func war_risk(n: Nation) -> float:
+	return clampf(n.culture_bias("aggression") * WAR_RISK_AGGRESSION_WEIGHT \
+		+ n.war_hawk * WAR_RISK_HAWK_WEIGHT, 0.0, 1.0)
 
 
 static func _foreign_war_count(world: WorldState, n: Nation) -> int:

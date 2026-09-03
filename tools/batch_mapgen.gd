@@ -10,6 +10,10 @@ func _initialize() -> void:
 	var runs := int(args.get("runs", 100))
 	var seed0 := int(args.get("seed0", 1))
 	var out_path: String = args.get("out", "res://out/mapgen.csv")
+	var source_kind := MapSource.parse_kind(args.get("map-source", "earth"))
+	if source_kind < 0:
+		quit(2)
+		return
 
 	var check_keys := ["two_components", "top2_big_enough", "no_pangaea", "island_variety"]
 	var lines := PackedStringArray(["seed,land_count,components,largest,second,largest_frac,"
@@ -25,7 +29,7 @@ func _initialize() -> void:
 
 	for i in range(runs):
 		var s := seed0 + i
-		var r := MapGenerator.generate_once(s)
+		var r := MapSource.create_map_once(s, source_kind)
 		var st: Dictionary = r["stats"]
 		var ck: Dictionary = r["checks"]
 
@@ -40,7 +44,7 @@ func _initialize() -> void:
 
 		if r["valid"]:
 			pass_count += 1
-		if st["land_count"] == MapGenerator.LAND_TARGET:
+		if st["land_count"] == 5000:
 			land_ok += 1
 		comp_values.append(st["component_count"])
 		frac_sum += st["largest_frac"]
@@ -55,7 +59,8 @@ func _initialize() -> void:
 
 	comp_values.sort()
 	print("runs=%d" % runs)
-	print("land == %d : %d/%d" % [MapGenerator.LAND_TARGET, land_ok, runs])
+	print("map_source=%s" % MapSource.kind_name(source_kind))
+	print("land == %d : %d/%d" % [5000, land_ok, runs])
 	for k in check_keys:
 		print("  %-16s %5.1f%%" % [k, 100.0 * check_pass[k] / runs])
 	print("VALID (4조건 전부) : %.1f%%" % (100.0 * pass_count / runs))

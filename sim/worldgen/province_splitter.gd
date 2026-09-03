@@ -1,7 +1,9 @@
 class_name ProvinceSplitter extends RefCounted
 
 ## 제약 있는 성장으로 육지를 프로빈스로 쪼갠다. 보로노이는 크기 제어가 불가능해서 쓰지 않는다.
-## 목표 평균 17타일, 하드 상한 30타일.
+## 기준 격자(granularity 1.0) 목표 평균 17타일, 하드 상한 30타일.
+## 실제 값은 MapSource 가 주는 granularity 배율을 곱해 쓴다 — 타일이 잘아지면
+## 같은 실제 면적의 프로빈스가 더 많은 타일을 차지하기 때문이다.
 
 const MAX_TILES := 30
 const TARGET_MIN := 8
@@ -20,13 +22,22 @@ const MOUNTAIN_TOP_PCT := 0.15
 const HILL_NEXT_PCT := 0.30
 
 
-## land/elevation 은 MapGenerator 결과, tagged 는 FeatureTagger.tag() 결과.
+static func max_tiles(granularity: float) -> int:
+	return int(round(MAX_TILES * granularity))
+
+
+## land/elevation 은 MapSource 결과, tagged 는 FeatureTagger.tag() 결과.
 static func split(land: PackedByteArray, elevation: PackedFloat32Array,
-		tagged: Dictionary, rng: RandomNumberGenerator) -> Array[Province]:
-	var nbr := MapGenerator.neighbor_cache()
+		tagged: Dictionary, rng: RandomNumberGenerator, width: int, nbr: Array) -> Array[Province]:
 	var total := land.size()
 	var land_comp: PackedInt32Array = tagged["land_comp"]
-	var comp_sizes: Dictionary = tagged["comp_sizes"]
+	var country: PackedInt32Array = tagged.get("country", PackedInt32Array())
+	if country.size() == total:
+		# 실제 국경이 있으면 프로빈스는 국경을 넘지 않는다. 성장·고아 흡수·분할이
+		# 전부 이 배열 하나만 보므로 그룹 정의를 바꾸는 것으로 충분하다.
+		land_comp = _country_components(land, country, nbr)
+	var granularity := float(tagged.get("granularity", 1.0))
+	var cap := max_tiles(granularity)
 
 	var barriers := _build_barriers(land, elevation, nbr, rng)
 
@@ -38,7 +49,7 @@ static func split(land: PackedByteArray, elevation: PackedFloat32Array,
 	var comp_tiles := _tiles_by_component(land_comp, total)
 	for comp_id in comp_tiles.keys():
 		var tiles: Array = comp_tiles[comp_id]
-		if tiles.size() <= MAX_TILES:
+		if tiles.size() <= cap:
 			# 섬 요구사항 자동 충족: 작은 컴포넌트는 통째로 1 프로빈스
 			var pid := sizes.size()
 			sizes.append(0)
@@ -46,10 +57,36 @@ static func split(land: PackedByteArray, elevation: PackedFloat32Array,
 				assigned[t] = pid
 				sizes[pid] += 1
 			continue
-		_grow(tiles, comp_id, land_comp, nbr, barriers, assigned, sizes, rng)
+		_grow(tiles, comp_id, land_comp, nbr, barriers, assigned, sizes, rng, width, granularity)
 
-	_absorb_orphans(tiles_flat(comp_tiles), land_comp, nbr, assigned, sizes)
-	return _build_provinces(assigned, sizes, land, elevation, nbr, tagged)
+	_absorb_orphans(tiles_flat(comp_tiles), land_comp, nbr, assigned, sizes, granularity)
+	var provinces := _build_provinces(assigned, sizes, land, elevation, nbr, tagged, width)
+	# 지형과 해안이 정해진 뒤라야 인프라 상한을 매길 수 있다.
+	for p in provinces:
+		p.assign_infra_cap(rng.randfn(0.0, Province.INFRA_CAP_JITTER))
+	return provinces
+
+
+## 육지 연결 성분을 국가 단위로 다시 쪼갠다. 같은 섬이라도 나라가 다르면 다른 그룹.
+static func _country_components(land: PackedByteArray, country: PackedInt32Array,
+		nbr: Array) -> PackedInt32Array:
+	var out := PackedInt32Array()
+	out.resize(land.size())
+	out.fill(-1)
+	var next_id := 0
+	for start in range(land.size()):
+		if land[start] == 0 or out[start] != -1:
+			continue
+		out[start] = next_id
+		var stack: Array[int] = [start]
+		while not stack.is_empty():
+			var cur: int = stack.pop_back()
+			for n: int in nbr[cur]:
+				if land[n] == 1 and out[n] == -1 and country[n] == country[cur]:
+					out[n] = next_id
+					stack.append(n)
+		next_id += 1
+	return out
 
 
 static func tiles_flat(comp_tiles: Dictionary) -> Array:
@@ -96,9 +133,11 @@ static func _blocked(barriers: Dictionary, a: int, b: int, total: int) -> bool:
 
 static func _grow(tiles: Array, comp_id: int, land_comp: PackedInt32Array, nbr: Array,
 		barriers: Dictionary, assigned: PackedInt32Array, sizes: Array[int],
-		rng: RandomNumberGenerator) -> void:
+		rng: RandomNumberGenerator, width: int, granularity: float) -> void:
 	var total := land_comp.size()
-	var seeds := _poisson_seeds(tiles, rng)
+	var seeds := _poisson_seeds(tiles, rng, width, granularity)
+	var target_lo := int(round(TARGET_MIN * granularity))
+	var target_hi := int(round(TARGET_MAX * granularity))
 
 	var local_ids: Array[int] = []
 	var frontier: Array = []
@@ -111,7 +150,7 @@ static func _grow(tiles: Array, comp_id: int, land_comp: PackedInt32Array, nbr: 
 		local_ids.append(pid)
 		frontier.append(_expandable(s, comp_id, land_comp, nbr, barriers, assigned, total))
 		head.append(0)
-		target.append(rng.randi_range(TARGET_MIN, TARGET_MAX))
+		target.append(rng.randi_range(target_lo, target_hi))
 
 	var progressed := true
 	while progressed:
@@ -145,18 +184,20 @@ static func _expandable(from: int, comp_id: int, land_comp: PackedInt32Array, nb
 	return out
 
 
-static func _poisson_seeds(tiles: Array, rng: RandomNumberGenerator) -> Array[int]:
-	var want := maxi(1, int(round(tiles.size() / AVG_TARGET)))
+static func _poisson_seeds(tiles: Array, rng: RandomNumberGenerator, width: int,
+		granularity: float) -> Array[int]:
+	var want := maxi(1, int(round(tiles.size() / (AVG_TARGET * granularity))))
+	var min_dist := int(round(SEED_MIN_DIST * sqrt(granularity)))
 	var seeds: Array[int] = []
 	var seed_coords: Array[Vector2i] = []
 	var tries := want * SEED_TRIES_PER_SEED
 	while seeds.size() < want and tries > 0:
 		tries -= 1
 		var t: int = tiles[rng.randi_range(0, tiles.size() - 1)]
-		var c := Vector2i(t % MapGenerator.W, t / MapGenerator.W)
+		var c := Vector2i(t % width, t / width)
 		var ok := true
 		for other in seed_coords:
-			if Hex.distance(c.x, c.y, other.x, other.y) < SEED_MIN_DIST:
+			if Hex.distance(c.x, c.y, other.x, other.y) < min_dist:
 				ok = false
 				break
 		if ok:
@@ -168,12 +209,12 @@ static func _poisson_seeds(tiles: Array, rng: RandomNumberGenerator) -> Array[in
 # ---------------------------------------------------------------- 고아 타일 흡수
 
 static func _absorb_orphans(all_tiles: Array, land_comp: PackedInt32Array, nbr: Array,
-		assigned: PackedInt32Array, sizes: Array[int]) -> void:
+		assigned: PackedInt32Array, sizes: Array[int], granularity: float) -> void:
 	for start: int in all_tiles:
 		if assigned[start] != -1:
 			continue
 		var cluster := _unassigned_cluster(start, land_comp, nbr, assigned)
-		_place_cluster(cluster, nbr, assigned, sizes)
+		_place_cluster(cluster, land_comp, nbr, assigned, sizes, granularity)
 
 
 static func _unassigned_cluster(start: int, land_comp: PackedInt32Array, nbr: Array,
@@ -194,17 +235,18 @@ static func _unassigned_cluster(start: int, land_comp: PackedInt32Array, nbr: Ar
 	return cluster
 
 
-## 30 이하면 가장 작은 인접 프로빈스에 흡수, 안 들어가면 독립 프로빈스. 30 초과면 먼저 쪼갠다.
-static func _place_cluster(cluster: Array[int], nbr: Array, assigned: PackedInt32Array,
-		sizes: Array[int]) -> void:
-	if cluster.size() > MAX_TILES:
-		for chunk in _chunk(cluster, nbr):
-			_place_cluster(chunk, nbr, assigned, sizes)
+## 상한 이하면 가장 작은 인접 프로빈스에 흡수, 안 들어가면 독립 프로빈스. 초과면 먼저 쪼갠다.
+static func _place_cluster(cluster: Array[int], land_comp: PackedInt32Array, nbr: Array,
+		assigned: PackedInt32Array, sizes: Array[int], granularity: float) -> void:
+	var cap := max_tiles(granularity)
+	if cluster.size() > cap:
+		for chunk in _chunk(cluster, nbr, granularity):
+			_place_cluster(chunk, land_comp, nbr, assigned, sizes, granularity)
 		return
 
-	var host := _smallest_adjacent(cluster, nbr, assigned, sizes)
+	var host := _smallest_adjacent(cluster, land_comp, nbr, assigned, sizes)
 	var pid := host
-	if host == -1 or sizes[host] + cluster.size() > MAX_TILES:
+	if host == -1 or sizes[host] + cluster.size() > cap:
 		pid = sizes.size()
 		sizes.append(0)
 	for t in cluster:
@@ -212,20 +254,24 @@ static func _place_cluster(cluster: Array[int], nbr: Array, assigned: PackedInt3
 		sizes[pid] += 1
 
 
-static func _smallest_adjacent(cluster: Array[int], nbr: Array, assigned: PackedInt32Array,
-		sizes: Array[int]) -> int:
+## 그룹 밖으로는 흡수하지 않는다. land_comp 가 국경으로 갈린 그룹이면
+## 이 조건이 프로빈스가 국경을 넘지 않게 막는 마지막 관문이다.
+static func _smallest_adjacent(cluster: Array[int], land_comp: PackedInt32Array, nbr: Array,
+		assigned: PackedInt32Array, sizes: Array[int]) -> int:
+	var comp := land_comp[cluster[0]]
 	var best := -1
 	for t in cluster:
 		for n: int in nbr[t]:
 			var pid := assigned[n]
-			if pid < 0:
+			if pid < 0 or land_comp[n] != comp:
 				continue
 			if best == -1 or sizes[pid] < sizes[best] or (sizes[pid] == sizes[best] and pid < best):
 				best = pid
 	return best
 
 
-static func _chunk(cluster: Array[int], nbr: Array) -> Array:
+static func _chunk(cluster: Array[int], nbr: Array, granularity: float) -> Array:
+	var chunk_size := int(round(CHUNK_SIZE * granularity))
 	var pool: Dictionary = {}
 	for t in cluster:
 		pool[t] = true
@@ -236,11 +282,11 @@ static func _chunk(cluster: Array[int], nbr: Array) -> Array:
 		var piece: Array[int] = []
 		var stack: Array[int] = [start]
 		pool.erase(start)
-		while not stack.is_empty() and piece.size() < CHUNK_SIZE:
+		while not stack.is_empty() and piece.size() < chunk_size:
 			var cur: int = stack.pop_back()
 			piece.append(cur)
 			for n: int in nbr[cur]:
-				if pool.has(n) and piece.size() + stack.size() < CHUNK_SIZE:
+				if pool.has(n) and piece.size() + stack.size() < chunk_size:
 					pool.erase(n)
 					stack.append(n)
 		piece.sort()
@@ -251,9 +297,13 @@ static func _chunk(cluster: Array[int], nbr: Array) -> Array:
 # ---------------------------------------------------------------- Province 객체 구성
 
 static func _build_provinces(assigned: PackedInt32Array, sizes: Array[int], land: PackedByteArray,
-		elevation: PackedFloat32Array, nbr: Array, tagged: Dictionary) -> Array[Province]:
+		elevation: PackedFloat32Array, nbr: Array, tagged: Dictionary,
+		width: int) -> Array[Province]:
 	var sea_zone: PackedInt32Array = tagged["sea_zone"]
 	var features: PackedInt32Array = tagged["features"]
+	var regions: PackedByteArray = tagged.get("regions", PackedByteArray())
+	var longitude: PackedFloat32Array = tagged.get("longitude", PackedFloat32Array())
+	var latitude: PackedFloat32Array = tagged.get("latitude", PackedFloat32Array())
 
 	var provinces: Array[Province] = []
 	var tile_lists: Array = []
@@ -274,13 +324,27 @@ static func _build_provinces(assigned: PackedInt32Array, sizes: Array[int], land
 
 		var neighbors: Dictionary = {}
 		var zones: Dictionary = {}
+		var region_votes: Dictionary = {}
 		var sum_pos := Vector2.ZERO
 		var elev_sum := 0.0
+		var lon_sin := 0.0
+		var lon_cos := 0.0
+		var lat_sum := 0.0
+		var geo_count := 0
 		for t in p.tiles:
-			var col := t % MapGenerator.W
-			var row := t / MapGenerator.W
+			var col := t % width
+			var row := t / width
 			sum_pos += Hex.to_plane(col, row)
 			elev_sum += elevation[t]
+			if regions.size() == land.size() and regions[t] != MapSource.REGION_NONE:
+				var region := int(regions[t])
+				region_votes[region] = int(region_votes.get(region, 0)) + 1
+			if longitude.size() == land.size() and latitude.size() == land.size():
+				var lon_rad := deg_to_rad(longitude[t])
+				lon_sin += sin(lon_rad)
+				lon_cos += cos(lon_rad)
+				lat_sum += latitude[t]
+				geo_count += 1
 			if features[t] == FeatureTagger.Feature.ISLAND:
 				p.is_island = true
 			for n: int in nbr[t]:
@@ -290,6 +354,16 @@ static func _build_provinces(assigned: PackedInt32Array, sizes: Array[int], land
 				elif assigned[n] != i and assigned[n] >= 0:
 					neighbors[assigned[n]] = true
 		p.centroid = sum_pos / maxf(p.tiles.size(), 1)
+		if not region_votes.is_empty():
+			var region_order: Array = region_votes.keys()
+			region_order.sort_custom(func(a: int, b: int) -> bool:
+				if region_votes[a] == region_votes[b]:
+					return a < b
+				return region_votes[a] > region_votes[b])
+			p.region = region_order[0]
+		if geo_count > 0:
+			p.longitude = rad_to_deg(atan2(lon_sin, lon_cos))
+			p.latitude = lat_sum / geo_count
 
 		var nb_keys: Array = neighbors.keys()
 		nb_keys.sort()

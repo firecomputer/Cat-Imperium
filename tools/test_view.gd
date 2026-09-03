@@ -8,6 +8,8 @@ var main: Control
 
 
 func _initialize() -> void:
+	# M13 기본값은 EarthMapSource 이지만 1차 UI 회귀는 기존 노이즈 지형에 고정한다.
+	OS.set_environment("CAT_EMPIRE_MAP_SOURCE", "noise")
 	main = load("res://Main.tscn").instantiate()
 	root.add_child(main)
 	call_deferred("_run")
@@ -98,7 +100,13 @@ func _check_naval_view() -> void:
 
 ## 전쟁이 붙은 세계에서 지도 오버레이가 실제 교전·공성을 잡아내는지 본다.
 func _check_war_overlay() -> void:
+	# 턴 120 을 못 박으면 시뮬 쪽 변경이 이 시드의 우연한 전황을 바꿀 때마다
+	# 뷰와 무관한 이유로 깨진다 (M10 이 test_rebellion·test_war 에서 고친 것과 같다).
+	# 검사의 목적은 "교전이 있는 세계에서 오버레이가 맞는가" 이므로 교전이 생길
+	# 때까지 진행한다.
 	SimClock.run(main.world, 120)
+	while _contested_provinces() == 0 and main.world.turn < 400:
+		SimClock.run(main.world, 20)
 	main._process_new_events()
 	main.map_renderer.on_world_advanced()
 	await process_frame
@@ -110,21 +118,8 @@ func _check_war_overlay() -> void:
 			sieges += 1
 	assert(renderer._siege_markers.size() == sieges,
 		"공성 마커 수가 실제 공성 수와 같아야 한다")
-	var battles := 0
-	for pid in main.world.armies_by_province.keys():
-		var nations := {}
-		for army_id: int in main.world.armies_at(pid):
-			if main.world.armies[army_id].is_alive:
-				nations[main.world.armies[army_id].nation_id] = true
-		var ids: Array = nations.keys()
-		var contested := false
-		for i in range(ids.size()):
-			for j in range(i + 1, ids.size()):
-				if Diplomacy.are_at_war(main.world, int(ids[i]), int(ids[j])):
-					contested = true
-		if contested:
-			battles += 1
-	assert(battles > 0, "이 시드 120턴에는 교전중인 프로빈스가 있어야 한다")
+	var battles := _contested_provinces()
+	assert(battles > 0, "교전중인 프로빈스가 있는 상태로 검사해야 한다")
 	assert(renderer._battle_markers.size() == battles,
 		"교전 마커 수가 실제 교전 수와 같아야 한다")
 	var joined := "\n".join(main.event_lines)
@@ -133,3 +128,29 @@ func _check_war_overlay() -> void:
 	main.map_renderer.set_show_war(false)
 	assert(not renderer.show_war, "전쟁 오버레이를 끌 수 있어야 한다")
 	main.map_renderer.set_show_war(true)
+
+
+## 서로 전쟁 중인 두 나라의 군대가 같이 서 있는 프로빈스 수.
+## world.armies 를 직접 훑는다. armies_by_province 는 10단계(Military)에서만 재구축되고
+## Military.create_army 는 색인에 넣지 않으므로, 11단계(Unrest)에서 태어난 반란군은
+## 턴이 끝날 때 색인에 없다. 렌더러는 world.armies 를 읽으므로 색인으로 재면 어긋난다.
+func _contested_provinces() -> int:
+	var by_province := {}
+	for army in main.world.armies:
+		if not army.is_alive or army.province_id < 0:
+			continue
+		if not by_province.has(army.province_id):
+			by_province[army.province_id] = {}
+		by_province[army.province_id][army.nation_id] = true
+	var battles := 0
+	for pid in by_province.keys():
+		var nations: Dictionary = by_province[pid]
+		var ids: Array = nations.keys()
+		var contested := false
+		for i in range(ids.size()):
+			for j in range(i + 1, ids.size()):
+				if Diplomacy.are_at_war(main.world, int(ids[i]), int(ids[j])):
+					contested = true
+		if contested:
+			battles += 1
+	return battles

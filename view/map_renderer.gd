@@ -11,6 +11,8 @@ const EmpireSystem = preload("res://sim/systems/empire_system.gd")
 ## 계층: _base (지형·경계) / _overlay (도시·전쟁·선택). 호버는 무거운 _base 를 건드리지 않는다.
 
 signal province_selected(province_id: int)
+## 교전 마커를 직접 집었을 때. 프로빈스 선택과 별개로 전투 패널을 연다.
+signal battle_selected(province_id: int)
 
 enum MapMode { POLITICAL, GDP, INFRA, UNREST, SUPPLY, NAVAL }
 
@@ -94,7 +96,7 @@ var _highlight_lines := PackedVector2Array()
 var _controller_cache := PackedInt32Array()
 var _last_color := PackedColorArray()         # 프로빈스별 직전 색. 바뀐 것만 다시 칠한다
 var _army_markers: Array = []                 # {pos, color, radius}
-var _battle_markers: Array = []               # {pos}
+var _battle_markers: Array = []               # {pos, province, sides:[{color, power}]}
 var _siege_markers: Array = []                # {pos, progress, color}
 var _fleet_markers: Array = []                # {pos, color, radius, battle}
 var _transport_markers: Array = []            # {pos, color, radius, target}
@@ -157,9 +159,9 @@ func set_world(value: WorldState) -> void:
 	pan = Vector2.ZERO
 	_highlight_nations.clear()
 	_highlight_until = 0.0
-	_tile_to_province.resize(MapGenerator.TOTAL)
+	_tile_to_province.resize(_map_total())
 	_tile_to_province.fill(-1)
-	_tile_to_zone.resize(MapGenerator.TOTAL)
+	_tile_to_zone.resize(_map_total())
 	_tile_to_zone.fill(-1)
 	if world != null:
 		for p in world.provinces:
@@ -269,9 +271,9 @@ func _build_geometry() -> void:
 	_zone_lines = PackedVector2Array()
 	_zone_line_a = PackedInt32Array()
 	_zone_line_b = PackedInt32Array()
-	_tile_slot.resize(MapGenerator.TOTAL)
+	_tile_slot.resize(_map_total())
 	_tile_slot.fill(-1)
-	_sea_slot.resize(MapGenerator.TOTAL)
+	_sea_slot.resize(_map_total())
 	_sea_slot.fill(-1)
 	if world == null:
 		return
@@ -295,16 +297,16 @@ func _build_geometry() -> void:
 	for p in world.provinces:
 		for tile: int in p.tiles:
 			var slot := _tile_slot[tile]
-			var col := tile % MapGenerator.W
-			var row := tile / MapGenerator.W
+			var col := tile % _map_width()
+			var row := tile / _map_width()
 			var deltas: Array = Hex.NEIGHBOR_DELTAS[row & 1]
 			for d in range(6):
 				var delta: Vector2i = deltas[d]
 				var nc := col + delta.x
 				var nr := row + delta.y
 				var neighbor := -1
-				if nc >= 0 and nc < MapGenerator.W and nr >= 0 and nr < MapGenerator.H:
-					neighbor = nr * MapGenerator.W + nc
+				if nc >= 0 and nc < _map_width() and nr >= 0 and nr < _map_height():
+					neighbor = nr * _map_width() + nc
 				var other := -1 if neighbor < 0 else _tile_to_province[neighbor]
 				# 변은 한 번만 담는다. 이웃도 육지면 낮은 타일 쪽에서만 만든다.
 				if other >= 0 and neighbor < tile:
@@ -338,7 +340,7 @@ func _build_geometry() -> void:
 ## 바다 타일도 삼각형으로 캐시해 둔다. 제해권 지도에서만 제출하므로
 ## 평소에는 메모리만 차지하고 드로우 비용은 0이다.
 func _build_sea_geometry(edge_of_delta: Array) -> void:
-	for tile in range(MapGenerator.TOTAL):
+	for tile in range(_map_total()):
 		if world.land[tile] != 0 or _tile_to_zone[tile] < 0:
 			continue
 		var slot := _sea_verts.size()
@@ -353,13 +355,13 @@ func _build_sea_geometry(edge_of_delta: Array) -> void:
 			_sea_indices.append(slot + i)
 			_sea_indices.append(slot + i + 1)
 
-	for tile in range(MapGenerator.TOTAL):
+	for tile in range(_map_total()):
 		var zone := _tile_to_zone[tile]
 		if zone < 0:
 			continue
 		var slot := _sea_slot[tile]
-		var col := tile % MapGenerator.W
-		var row := tile / MapGenerator.W
+		var col := tile % _map_width()
+		var row := tile / _map_width()
 		var deltas: Array = Hex.NEIGHBOR_DELTAS[row & 1]
 		for d in range(6):
 			var delta: Vector2i = deltas[d]
@@ -367,16 +369,16 @@ func _build_sea_geometry(edge_of_delta: Array) -> void:
 			var nr := row + delta.y
 			var neighbor := -1
 			var other := -1
-			if nc >= 0 and nc < MapGenerator.W and nr >= 0 and nr < MapGenerator.H:
-				neighbor = nr * MapGenerator.W + nc
+			if nc >= 0 and nc < _map_width() and nr >= 0 and nr < _map_height():
+				neighbor = nr * _map_width() + nc
 				other = _tile_to_zone[neighbor]
 			if other == zone:
 				continue
 			if other >= 0 and neighbor < tile:
 				continue                          # 변은 한 번만 담는다
 			# 육지와 맞닿은 변은 프로빈스 경계가 이미 그린다.
-			if other < 0 and nc >= 0 and nc < MapGenerator.W \
-					and nr >= 0 and nr < MapGenerator.H:
+			if other < 0 and nc >= 0 and nc < _map_width() \
+					and nr >= 0 and nr < _map_height():
 				continue
 			var edge: int = edge_of_delta[row & 1][d]
 			_zone_lines.append(_sea_verts[slot + edge])
@@ -553,6 +555,7 @@ func _rebuild_war() -> void:
 		return
 
 	var by_province := {}
+	var power_by_province := {}
 	for army in world.armies:
 		if not army.is_alive or army.province_id < 0:
 			continue
@@ -560,6 +563,12 @@ func _rebuild_war() -> void:
 			by_province[army.province_id] = {}
 		var slot: Dictionary = by_province[army.province_id]
 		slot[army.nation_id] = float(slot.get(army.nation_id, 0.0)) + army.troops
+		# 마커에 병력만 실으면 사기·보급·기술이 빠져 "누가 이기고 있는지"가 안 보인다.
+		if not power_by_province.has(army.province_id):
+			power_by_province[army.province_id] = {}
+		var pslot: Dictionary = power_by_province[army.province_id]
+		pslot[army.nation_id] = float(pslot.get(army.nation_id, 0.0)) \
+			+ Military.combat_power(world, army)
 
 	var pids: Array = by_province.keys()
 	pids.sort()
@@ -586,7 +595,14 @@ func _rebuild_war() -> void:
 				"radius": _troop_radius(troops),
 			})
 		if contested:
-			_battle_markers.append({"pos": center})
+			var powers: Dictionary = power_by_province.get(pid, {})
+			var sides := []
+			for nation_id: int in nation_ids:
+				sides.append({
+					"color": _nation_color(nation_id),
+					"power": maxf(float(powers.get(nation_id, 0.0)), 0.0),
+				})
+			_battle_markers.append({"pos": center, "province": pid, "sides": sides})
 
 	for p in world.provinces:
 		if p.siege_by_nation < 0 or p.siege_progress <= 0.0:
@@ -759,11 +775,14 @@ func _draw_war(layer: Control, scale: float) -> void:
 	var pulse := 1.0 + sin(_pulse) * 0.14
 	for marker in _battle_markers:
 		var pos: Vector2 = marker["pos"]
-		var radius := maxf(0.68, MARKER_MIN_PX * 2.2 / maxf(scale, 0.001)) * pulse
+		# 막대는 펄스를 타지 않는다 — 폭이 흔들리면 전력비를 눈으로 못 잰다.
+		var base := maxf(0.68, MARKER_MIN_PX * 2.2 / maxf(scale, 0.001))
+		var radius := base * pulse
 		layer.draw_arc(pos, radius, 0.0, TAU, 26, BATTLE, thin * 1.3)
 		var arm := radius * 0.45
 		layer.draw_line(pos + Vector2(-arm, -arm), pos + Vector2(arm, arm), BATTLE, thin)
 		layer.draw_line(pos + Vector2(-arm, arm), pos + Vector2(arm, -arm), BATTLE, thin)
+		_draw_power_bar(layer, pos + Vector2(0.0, -base * 1.6), base, marker["sides"], thin)
 
 	for marker in _fleet_markers:
 		var pos: Vector2 = marker["pos"]
@@ -791,6 +810,28 @@ func _draw_war(layer: Control, scale: float) -> void:
 			pos + Vector2(-radius * 0.7, radius),
 		]), marker["color"])
 		layer.draw_line(pos + Vector2(0.0, -radius * 1.6), pos, marker["color"], thin)
+
+
+## 전투력 비율 막대. 폭은 고정이고 칸 너비가 전력 지분이라, 색만 보면
+## 어느 쪽이 우세한지 읽힌다 (병력이 아니라 사기·보급·기술을 먹은 전투력이다).
+func _draw_power_bar(layer: Control, pos: Vector2, radius: float, sides: Array,
+		thin: float) -> void:
+	var total := 0.0
+	for side in sides:
+		total += float(side["power"])
+	if total <= 0.0:
+		return
+	var width := radius * 2.6
+	var height := maxf(radius * 0.36, thin * 2.0)
+	var left := pos.x - width * 0.5
+	var top := pos.y - height * 0.5
+	layer.draw_rect(Rect2(left - thin, top - thin,
+		width + thin * 2.0, height + thin * 2.0), Color(0.03, 0.05, 0.08, 0.85))
+	var x := left
+	for side in sides:
+		var w := width * float(side["power"]) / total
+		layer.draw_rect(Rect2(x, top, w, height), side["color"])
+		x += w
 
 
 func _draw_water_grid(layer: Control) -> void:
@@ -861,8 +902,13 @@ func _nation_color(nation_id: int) -> Color:
 			and world.nations[n.overlord].is_alive:
 		root = world.nations[n.overlord]
 		is_vassal = true
-	var culture_hues := [0.09, 0.50, 0.04, 0.63, 0.34]
-	var hue: float = fmod(float(culture_hues[root.culture]) + root.id * 0.047, 1.0)
+	# 문화 12종(M13.7-a) 색상. 기존 5종의 hue 는 그대로 두고 신설 7종만 빈 구간에 넣는다.
+	var culture_hues := [
+		0.09, 0.50, 0.04, 0.63, 0.34,          # 샴 랙돌 치즈태비 러시안블루 코리안숏헤어
+		0.56, 0.71, 0.14, 0.87, 0.21, 0.44, 0.78,
+	]
+	var hue: float = fmod(float(culture_hues[root.culture % culture_hues.size()])
+		+ root.id * 0.047, 1.0)
 	var saturation := 0.58 if not n.is_rebel else 0.82
 	return Color.from_hsv(hue, saturation, VASSAL_VALUE if is_vassal else 0.78)
 
@@ -883,11 +929,14 @@ func _gui_input(event: InputEvent) -> void:
 			_dragging = button.pressed
 			accept_event()
 		elif button.button_index == MOUSE_BUTTON_LEFT and button.pressed:
+			var battle := _battle_at(button.position)
 			var pid := _province_at(button.position)
 			if pid >= 0:
 				selected_province = pid
 				province_selected.emit(pid)
 				_overlay.queue_redraw()
+			if battle >= 0:
+				battle_selected.emit(battle)
 			accept_event()
 	elif event is InputEventMouseMotion:
 		var motion := event as InputEventMouseMotion
@@ -916,6 +965,23 @@ func _zoom_at(screen_point: Vector2, factor: float) -> void:
 	_redraw_all()
 
 
+## 교전 마커는 프로빈스 중심에 겹쳐 있다. 마커 반지름은 _draw_war 와 같은 식이라야
+## 보이는 것과 집히는 것이 어긋나지 않는다 (펄스 배율만 뺀다).
+func _battle_at(screen_point: Vector2) -> int:
+	if world == null or not show_war:
+		return -1
+	if _war_dirty:
+		_rebuild_war()
+	var transform := _map_transform()
+	var scale := transform.get_scale().x
+	var radius := maxf(0.68, MARKER_MIN_PX * 2.2 / maxf(scale, 0.001)) * scale
+	for marker in _battle_markers:
+		var pos: Vector2 = transform.origin + Vector2(marker["pos"]) * scale
+		if screen_point.distance_to(pos) <= radius:
+			return int(marker["province"])
+	return -1
+
+
 func _province_at(screen_point: Vector2) -> int:
 	if world == null:
 		return -1
@@ -928,13 +994,13 @@ func _tile_at(logical: Vector2) -> int:
 	var best_tile := -1
 	var best_distance := INF
 	for rr in range(row - 1, row + 2):
-		if rr < 0 or rr >= MapGenerator.H:
+		if rr < 0 or rr >= _map_height():
 			continue
 		var col_guess := int(round(logical.x - (0.5 if rr % 2 == 1 else 0.0)))
 		for cc in range(col_guess - 1, col_guess + 2):
-			if cc < 0 or cc >= MapGenerator.W:
+			if cc < 0 or cc >= _map_width():
 				continue
-			var tile := rr * MapGenerator.W + cc
+			var tile := rr * _map_width() + cc
 			var distance := logical.distance_squared_to(_tile_center(tile))
 			if distance < best_distance:
 				best_distance = distance
@@ -1031,16 +1097,16 @@ func _troops_text(troops: float) -> String:
 
 func _map_transform() -> Transform2D:
 	var unit := _base_unit() * zoom
-	var map_size := Vector2((MapGenerator.W + 0.5) * unit,
-		(MapGenerator.H - 1) * Hex.SQRT3_2 * unit + unit * 1.2)
+	var map_size := Vector2((_map_width() + 0.5) * unit,
+		(_map_height() - 1) * Hex.SQRT3_2 * unit + unit * 1.2)
 	var origin := (size - map_size) * 0.5 + Vector2(unit * 0.5, unit * 0.6) + pan
 	return Transform2D(0.0, Vector2(unit, unit), 0.0, origin)
 
 
 func _base_unit() -> float:
-	var by_width := maxf(size.x - 28.0, 1.0) / (MapGenerator.W + 0.5)
+	var by_width := maxf(size.x - 28.0, 1.0) / (_map_width() + 0.5)
 	var by_height := maxf(size.y - 28.0, 1.0) \
-		/ ((MapGenerator.H - 1) * Hex.SQRT3_2 + 1.2)
+		/ ((_map_height() - 1) * Hex.SQRT3_2 + 1.2)
 	return minf(by_width, by_height)
 
 
@@ -1055,4 +1121,16 @@ func _screen_from_logical(point: Vector2) -> Vector2:
 
 
 func _tile_center(tile: int) -> Vector2:
-	return Hex.to_plane(tile % MapGenerator.W, tile / MapGenerator.W)
+	return Hex.to_plane(tile % _map_width(), tile / _map_width())
+
+
+func _map_width() -> int:
+	return world.map_width if world != null else EarthMapSource.W
+
+
+func _map_height() -> int:
+	return world.map_height if world != null else EarthMapSource.H
+
+
+func _map_total() -> int:
+	return world.land.size() if world != null else EarthMapSource.TOTAL

@@ -16,3 +16,7 @@ __pycache__/
 /ne_10m_ocean/
 out/
 .venv/
+
+# 원본 표고 래스터 (~450MB). tools/build_earth_map.py 가 굽는
+# data/world/earth_map.bin 만 추적한다.
+/ETOPO_2022_v1_60s_N90W180_bed.tif

@@ -15,8 +15,13 @@ func _initialize() -> void:
 	var out_path: String = args.get("out", "res://out/map_%d.png" % seed_value)
 	var scale_px := int(args.get("scale", TILE_PX_DEFAULT))
 	var once: bool = args.has("once")
+	var source_kind := MapSource.parse_kind(args.get("map-source", "earth"))
+	if source_kind < 0:
+		quit(2)
+		return
 
-	var result: Dictionary = MapGenerator.generate_once(seed_value) if once else MapGenerator.generate(seed_value)
+	var result: Dictionary = MapSource.create_map_once(seed_value, source_kind) if once \
+		else MapSource.create_map(seed_value, source_kind)
 	var stats: Dictionary = result["stats"]
 
 	print("seed=%d  attempts=%d  valid=%s" % [result["seed"], result["attempts"], result["valid"]])
@@ -38,8 +43,10 @@ func _render(result: Dictionary, s: int) -> Image:
 	var land: PackedByteArray = result["land"]
 	var elevation: PackedFloat32Array = result["elevation"]
 
-	var img_w := int((MapGenerator.W + 1) * s)
-	var img_h := int(MapGenerator.H * Hex.SQRT3_2 * s) + s
+	var width: int = result["width"]
+	var height: int = result["height"]
+	var img_w := int((width + 1) * s)
+	var img_h := int(height * Hex.SQRT3_2 * s) + s
 	var img := Image.create(img_w, img_h, false, Image.FORMAT_RGB8)
 	img.fill(Color.BLACK)
 
@@ -50,9 +57,9 @@ func _render(result: Dictionary, s: int) -> Image:
 		hi = maxf(hi, e)
 	var span := maxf(hi - lo, 0.0001)
 
-	for row in range(MapGenerator.H):
-		for col in range(MapGenerator.W):
-			var idx := row * MapGenerator.W + col
+	for row in range(height):
+		for col in range(width):
+			var idx := row * width + col
 			var t := (elevation[idx] - lo) / span
 			var c := _land_color(t) if land[idx] == 1 else _sea_color(t)
 			var x0 := int((col + (0.5 if row % 2 == 1 else 0.0)) * s)

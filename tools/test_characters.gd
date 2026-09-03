@@ -162,7 +162,7 @@ func _nation_with_education(value: float) -> Nation:
 	law.id = "test_education"
 	law.category = "education"
 	law.modifiers = {"education": value}
-	n.laws["education"] = law
+	n.set_law("education", law)
 	return n
 
 
@@ -180,6 +180,7 @@ func _province() -> Province:
 
 func _world(n: Nation, p: Province, seed: int) -> WorldState:
 	var world := WorldState.new()
+	world.rng_pool = RngPool.new(113)
 	world.world_seed = seed
 	world.rng_pool = RngPool.new(seed)
 	world.nations = [n]
@@ -235,7 +236,7 @@ func _test_lifespan_reaches_two_hundred() -> void:
 	law.id = "test_health"
 	law.category = "health"
 	law.modifiers = {"healthcare": 0.5}
-	n.laws["health"] = law
+	n.set_law("health", law)
 	var world := _world(n, _province(), 99)
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 4

@@ -21,7 +21,7 @@ func _initialize() -> void:
 # ---------------------------------------------------------------- 해역 생성
 
 func _test_sea_is_split_into_zones() -> void:
-	var world := WorldState.create(1)
+	var world := WorldState.create(1, MapSource.Kind.NOISE)
 	assert(world.sea_zones.size() >= 80 and world.sea_zones.size() <= 160,
 		"바다는 100여 개 해역으로 쪼개진다 (실측 %d)" % world.sea_zones.size())
 	var biggest := 0
@@ -37,8 +37,8 @@ func _test_sea_is_split_into_zones() -> void:
 
 
 func _test_zone_tiles_are_connected() -> void:
-	var world := WorldState.create(2)
-	var nbr := MapGenerator.neighbor_cache()
+	var world := WorldState.create(2, MapSource.Kind.NOISE)
+	var nbr := MapSource.neighbor_cache(world.map_width, world.map_height)
 	for z in world.sea_zones:
 		var members := {}
 		for t: int in z.tiles:
@@ -56,7 +56,7 @@ func _test_zone_tiles_are_connected() -> void:
 
 
 func _test_coastal_provinces_know_their_zones() -> void:
-	var world := WorldState.create(3)
+	var world := WorldState.create(3, MapSource.Kind.NOISE)
 	for p in world.provinces:
 		if not p.is_coastal:
 			continue
@@ -67,8 +67,8 @@ func _test_coastal_provinces_know_their_zones() -> void:
 
 
 func _test_zone_split_is_deterministic() -> void:
-	var a := WorldState.create(7)
-	var b := WorldState.create(7)
+	var a := WorldState.create(7, MapSource.Kind.NOISE)
+	var b := WorldState.create(7, MapSource.Kind.NOISE)
 	assert(a.tile_zone == b.tile_zone, "같은 시드는 같은 해역을 만든다")
 
 
@@ -138,6 +138,7 @@ func _test_expedition_supply_costs_more_than_the_near_sea() -> void:
 ## 육로가 없으므로 상륙 말고는 갈 길이 없다.
 func _strait_world() -> WorldState:
 	var world := WorldState.new()
+	world.rng_pool = RngPool.new(111)
 	var mine := Nation.new()
 	mine.id = 0
 	mine.capital = 0
@@ -178,6 +179,7 @@ func _strait_world() -> WorldState:
 ## 본토(0) — 해역 0 — 섬(1) — 해역 1 — 먼 섬(2).
 func _chain_world() -> WorldState:
 	var world := WorldState.new()
+	world.rng_pool = RngPool.new(112)
 	var n := Nation.new()
 	n.id = 0
 	n.capital = 0

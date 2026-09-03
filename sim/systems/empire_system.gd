@@ -5,22 +5,52 @@ class_name EmpireSystem extends RefCounted
 ## 함께 흔들리도록 하는 것이 목적이다.
 
 const TRIBUTE_SHARE := 0.10
+## 공납이 정액이면 속국은 행정부하만큼의 값을 못 한다. 충성도에 걸어 두면
+## 권위를 지킨 종주국일수록 다음 원정을 스스로 벌 수 있다 (§P3).
+const TRIBUTE_LOYALTY_SPAN := 0.6          # 실효 공납 = 소득 × 0.10 × (0.4 ~ 1.0)
 const VASSAL_ADMIN_SHARE := 0.25
 const VASSAL_START_LOYALTY := 0.62         # 형성기에는 첫 후속 원정을 도울 수 있다
 const OFFENSIVE_JOIN_LOYALTY := 0.60
 const SECESSION_LOYALTY := 0.20
-const VASSAL_COHESION_COST := 0.004        # 셋째 속국부터 제국권 결속이 빠르게 어려워진다
+## 속국 수용력 (§P2). 예전에는 "셋째 속국부터" 라는 상수였고, 그래서 세 번째
+## 속국은 통치와 무관하게 이탈 타이머였다 (0.62 → 0.20 까지 약 52턴).
+## 실측 admin_load/capacity 중앙값이 0.40 이라 행정 여유는 아무 데도 안 쓰이고
+## 놀고 있었다 — 그 여유와 권위가 속국 정원을 벌게 한다.
+const VASSAL_CAPACITY_BASE := 1.0
+const VASSAL_CAPACITY_AUTHORITY := 3.0
+const VASSAL_CAPACITY_HEADROOM := 3.0
+const VASSAL_COHESION_COST := 0.010        # 정원을 넘긴 속국 하나당 충성도 감쇠
 const AUTHORITY_CRISIS := 0.30
 const AUTHORITY_STRONG := 0.65
 
 const INTEGRATION_RATE := 0.020
+## 점령법이 통합 속도를 정한다. 이 연결이 없으면 severity 는 불만만 올리는
+## 순손실이라 온건 통치에 아무 보상이 없고, 가혹한 통치에도 대가가 없다.
+## 약탈(0.9)은 통합을 사실상 멈추고 자치(-0.6)·동화(0.1)는 앞당긴다 —
+## 약탈로 번 돈의 값은 그 땅이 영영 본토가 되지 못한다는 것이다.
+const OCCUPATION_INTEGRATION_W := 0.95
+const OCCUPATION_INTEGRATION_MIN := 0.15
+const OCCUPATION_INTEGRATION_MAX := 1.60
+## 불만이 통합을 늦춘다. M10 까지는 0.70 에서 통째로 멈췄는데, 갓 정복한 땅은
+## 그 선을 십수 턴 만에 넘고 drift 가 양수라 통합이 영영 재개되지 않았다 —
+## 한 방향 래칫이라 새 정복지는 통치와 무관하게 자동으로 반란으로 끝났다
+## (실측 할양지의 35%, 평균 21턴). 연속 감속으로 바꿔 주둔과 온건한 점령법이
+## 이 구간을 되살릴 수 있게 한다. 0 으로 떨어뜨리지 않는 것이 핵심이다.
+const UNREST_INTEGRATION_FLOOR := 0.20
+## 분리주의가 1.0 이어도 통합이 완전히 멈추지는 않는다. 0 이면 한 번 크게 진압당한
+## 땅은 영원히 편입되지 않아 붕괴가 확정 경로가 된다 (M14 §1).
+const SEPARATISM_INTEGRATION_FLOOR := 0.15
 const OVEREXTENSION_UNREST_MAX := 0.018
+const CAPACITY_PER_CORE := 0.45            # 통합 완료 프로빈스가 돌려주는 행정 여력 (§P3)
 ## p.culture 는 어디서도 바뀌지 않았다. 그래서 통합이 끝난 정복지도
 ## culture_distance 가 남아 Unrest 의 완화(0.80)를 뚫고 잔여 압력이 계속 쌓였고,
 ## 대제국은 결국 문화 경계에서 갈라졌다. 통합 완료 뒤 다시 100턴을 조용히
 ## 지나면 동화한다. 난수를 쓰지 않는다 (§15).
 const ASSIMILATION_RATE := 0.010
 const ASSIMILATION_MAX_UNREST := 0.35
+## 문화의 동화 성향이 이문화 프로빈스 행정 부하를 깎는 폭 (M13.7-a).
+## 대가는 Economy.infra_upkeep 의 동화 행정비다 — 순수 이득 방향은 없다 (§5.5).
+const ASSIMILATION_ADMIN_RELIEF := 0.40
 
 const AUTHORITY_CONQUEST_WIN := 0.08
 const AUTHORITY_SUBJUGATION_WIN := 0.15
@@ -42,7 +72,12 @@ static func collect_tribute(world: WorldState) -> void:
 		var overlord: Nation = world.nations[v.overlord]
 		if not overlord.is_alive:
 			continue
-		var amount := maxf(v.income, 0.0) * TRIBUTE_SHARE
+		# 재정이 무너진 속국은 공납을 면제받는다 — 공납이 파산을 앞당기면
+		# 종주국은 다음 원정을 벌 재원 대신 이탈할 잔해를 얻는다.
+		if v.bankruptcy_timer > 0 or v.income - v.expenses < 0.0:
+			continue
+		var amount := maxf(v.income, 0.0) * TRIBUTE_SHARE \
+			* (0.4 + v.vassal_loyalty * TRIBUTE_LOYALTY_SPAN)
 		v.income -= amount
 		overlord.income += amount
 		if amount > 0.0 and world.turn % 12 == v.id % 12:
@@ -80,14 +115,21 @@ static func _tick_integration(world: WorldState) -> void:
 		if p.owner_nation < 0:
 			continue
 		var n: Nation = world.nations[p.owner_nation]
-		if not n.is_alive or p.controller() != n.id or p.unrest >= 0.70:
+		if not n.is_alive or p.controller() != n.id:
 			continue
 		if p.integration < 1.0:
 			var culture_factor := maxf(0.25, 1.0 - p.culture_distance(n.culture) * 0.60)
 			var supply_factor := 0.5 + p.supply * 0.5
-			var garrison_factor := 1.0 + p.garrison_ratio * 0.5
-			p.integration = minf(1.0, p.integration
-				+ INTEGRATION_RATE * culture_factor * supply_factor * garrison_factor)
+			# 주둔은 이제 통합 속도를 최대 두 배로 만든다. 병력을 눌러 앉히는 것이
+			# 불만을 깎는 임시방편(-0.04/턴)에 그치지 않고 통합 자체를 앞당겨야
+			# 세 레버(점령법·통합·주둔)가 한 경주 위에서 맞물린다.
+			var garrison_factor := 1.0 + p.garrison_ratio
+			var unrest_factor := maxf(UNREST_INTEGRATION_FLOOR, 1.0 - p.unrest)
+			# 군대로 눌린 기억이 남아 있는 동안은 행정이 앞으로 나가지 않는다.
+			var separatism_factor := maxf(1.0 - p.separatism, SEPARATISM_INTEGRATION_FLOOR)
+			p.integration = minf(1.0, p.integration + INTEGRATION_RATE
+				* culture_factor * supply_factor * garrison_factor * unrest_factor
+				* separatism_factor * occupation_integration_factor(n))
 			continue
 		_tick_assimilation(world, p, n)
 
@@ -115,16 +157,26 @@ static func _tick_assimilation(world: WorldState, p: Province, n: Nation) -> voi
 	})
 
 
+## severity 를 통합 속도 배율로 옮긴다. 관대할수록 빠르다.
+static func occupation_integration_factor(n: Nation) -> float:
+	return clampf(1.0 - n.occupation_law_severity() * OCCUPATION_INTEGRATION_W,
+		OCCUPATION_INTEGRATION_MIN, OCCUPATION_INTEGRATION_MAX)
+
+
 static func _recompute_administration(world: WorldState, n: Nation) -> void:
 	var load := 0.0
 	var foreign := 0
+	var core := 0
+	var culture_load := 0.50 * (1.0 - n.culture_bias("assimilation") * ASSIMILATION_ADMIN_RELIEF)
 	for pid in n.provinces:
 		var p: Province = world.provinces[pid]
 		if p.culture_distance(n.culture) > 0.0:
 			foreign += 1
+		if p.integration >= 1.0:
+			core += 1
 		load += 1.0
 		load += minf(p.distance_from_capital, 10.0) * 0.06
-		load += p.culture_distance(n.culture) * 0.50
+		load += p.culture_distance(n.culture) * culture_load
 		load += (1.0 - p.integration) * 0.75
 		if p.is_exclave:
 			load += 0.75
@@ -141,7 +193,11 @@ static func _recompute_administration(world: WorldState, n: Nation) -> void:
 	var political := clampf(n.unrest_suppression / 0.35, 0.0, 1.0)
 	var law_factor := clampf(1.0 / maxf(n.law_modifier("admin_cost"), 0.2), 0.75, 1.25)
 	var authority_factor := 0.75 + n.imperial_authority * 0.50
-	var capacity := (6.0 + capital_infra * 1.5 + political * 4.0) \
+	# 통합이 끝난 본토는 부하이면서 동시에 통치 기반이다 (§P3). 이 항이 없으면
+	# 프로빈스 하나를 먹을 때마다 load 만 늘고 capacity 는 그대로라 확장의
+	# 한계수익이 0 근처에 붙는다. 프로빈스당 부하(약 1.3)보다 작게 돌려준다 —
+	# 확장은 여전히 체감하지만 천장이 상수는 아니게 된다.
+	var capacity := (6.0 + capital_infra * 1.5 + political * 4.0 + core * CAPACITY_PER_CORE) \
 		* law_factor * authority_factor
 	n.foreign_exposure = float(foreign) / maxf(float(n.provinces.size()), 1.0)
 	n.admin_load = load
@@ -164,6 +220,13 @@ static func _tick_authority(world: WorldState, n: Nation) -> void:
 	_adjust_authority(world, n, delta, "realm_drift", false)
 
 
+## 속국을 몇이나 붙들 수 있는가. 권위와 행정 여유가 정원을 번다 (§P2).
+static func vassal_capacity(n: Nation) -> float:
+	var headroom := clampf(1.0 - n.admin_load / maxf(n.admin_capacity, 1.0), 0.0, 1.0)
+	return VASSAL_CAPACITY_BASE + n.imperial_authority * VASSAL_CAPACITY_AUTHORITY \
+		+ headroom * VASSAL_CAPACITY_HEADROOM
+
+
 static func _tick_loyalty(world: WorldState, v: Nation) -> void:
 	if v.overlord < 0 or v.overlord >= world.nations.size():
 		return
@@ -176,7 +239,8 @@ static func _tick_loyalty(world: WorldState, v: Nation) -> void:
 	delta += clampf((ratio - 1.0) * 0.0015, -0.003, 0.003)
 	delta -= Culture.distance(v.culture, overlord.culture) * 0.002
 	delta -= overlord.overextension * 0.003
-	delta -= maxf(overlord.vassals.size() - 1, 0) * VASSAL_COHESION_COST
+	delta -= maxf(float(overlord.vassals.size()) - vassal_capacity(overlord), 0.0) \
+		* VASSAL_COHESION_COST
 	if overlord.bankruptcy_timer > 0:
 		delta -= 0.020
 	v.vassal_loyalty = clampf(v.vassal_loyalty + delta, 0.0, 1.0)
@@ -284,7 +348,13 @@ static func call_vassals_to_war(world: WorldState, war: War, overlord: Nation,
 			"offensive_vassal" if offensive else "defensive_vassal")
 
 
+## 승전 시 전쟁 지지도. 반란 진압 승리는 여기를 지나지 않는다 — 진압이 전쟁 수행
+## 능력을 되돌려주면 제국이 무너지는 경로가 다시 막힌다 (M14 §4).
+const WAR_SUPPORT_VICTORY := 0.10
+
+
 static func on_peace(world: WorldState, winner: Nation, loser: Nation, goal: int) -> void:
+	winner.war_support = minf(winner.war_support + WAR_SUPPORT_VICTORY, 1.0)
 	if goal == War.Goal.SUBJUGATION:
 		# vassalize()가 승자 권위를 이미 올린다.
 		_adjust_authority(world, loser, AUTHORITY_WAR_LOSS, "war_lost", true)
@@ -357,6 +427,18 @@ static func realm_province_count(world: WorldState, n: Nation) -> int:
 		if member.is_alive and realm_root(world, member.id) == root_id:
 			total += member.provinces.size()
 	return total
+
+
+## 제국 판정 문턱 (배치 계측용). 0.12 는 40국 세계에서 "평균국의 4.8배" 라는 뜻이었다.
+## 국가 수가 지도 크기를 따라가므로(NationPlacer.nation_count) 그 배율을 보존한다 —
+## 절대값으로 두면 큰 지도일수록 제국 정의만 저절로 가혹해진다 (지구 115국에서 13.8배).
+const EMPIRE_THRESHOLD_BASE := 0.12
+const EMPIRE_THRESHOLD_BASE_NATIONS := 40.0
+
+
+static func empire_threshold(world: WorldState) -> float:
+	return EMPIRE_THRESHOLD_BASE * EMPIRE_THRESHOLD_BASE_NATIONS \
+		/ maxf(float(world.initial_nation_count), 1.0)
 
 
 static func realm_share(world: WorldState, n: Nation) -> float:

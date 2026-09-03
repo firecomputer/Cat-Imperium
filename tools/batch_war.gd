@@ -1,13 +1,12 @@
 extends SceneTree
 
 const EmpireSystem = preload("res://sim/systems/empire_system.gd")
-const EMPIRE_THRESHOLD := 0.12
 const EMPIRE_CONFIRM_TURNS := 12
 
 ## M8 외교·전쟁·평화 배치 출력.
 ##
 ##   godot4 --headless --path . --script res://tools/batch_war.gd -- \
-##     --runs 20 --turns 300 --out res://out/war.csv
+##     --runs 20 --turns 300 --map-source earth --out res://out/war.csv
 
 
 func _initialize() -> void:
@@ -16,18 +15,24 @@ func _initialize() -> void:
 	var turns := int(args.get("turns", 300))
 	var seed0 := int(args.get("seed0", 1))
 	var out_path: String = args.get("out", "res://out/war.csv")
+	var map_kind := MapSource.parse_kind(args.get("map-source", "noise"))
+	if map_kind < 0:
+		quit(2)
+		return
 
 	var lines := PackedStringArray(["seed,nation,culture,alive,provinces,fragments,"
 		+ "exclaves,gdp,troops,ships,allies,vassals,wars,rebellions_lost,"
 		+ "provinces_annexed,provinces_ceded,share_of_world,realm_share,"
-		+ "imperial_authority,admin_load,admin_capacity,overextension,overlord,vassal_loyalty"])
-	var event_lines := PackedStringArray(["seed,turn,kind,nation,other,reason"])
+		+ "imperial_authority,admin_load,admin_capacity,overextension,overlord,vassal_loyalty,"
+		+ "army_quality,military_readiness,strategic_power"])
+	var event_lines := PackedStringArray([
+		"seed,turn,kind,nation,other,reason,warscore,duration,lost,readiness"])
 	var empire_lines := PackedStringArray([
 		"seed,nation,enter_turn,exit_turn,duration,peak_realm_share,reason"])
 	var t0 := Time.get_ticks_msec()
 
 	for run_idx in range(runs):
-		var world := WorldState.create(seed0 + run_idx)
+		var world := WorldState.create(seed0 + run_idx, map_kind)
 		var tracker := {}
 		for t in range(turns):
 			SimClock.tick(world)
@@ -38,7 +43,8 @@ func _initialize() -> void:
 	_write(out_path, lines)
 	_write(out_path.get_basename() + "_events.csv", event_lines)
 	_write(out_path.get_basename() + "_empires.csv", empire_lines)
-	print("runs=%d turns=%d (%.1fs)" % [runs, turns, (Time.get_ticks_msec() - t0) / 1000.0])
+	print("runs=%d turns=%d map_source=%s (%.1fs)" % [runs, turns,
+		MapSource.kind_name(map_kind), (Time.get_ticks_msec() - t0) / 1000.0])
 	quit(0)
 
 
@@ -54,17 +60,20 @@ func _dump(lines: PackedStringArray, events: PackedStringArray, world: WorldStat
 			"rebellion":
 				lost[e["nation"]] = int(lost.get(e["nation"], 0)) + 1
 			"war_declared", "war_ended", "alliance_formed", "peace_signed", "vassalized", \
-			"vassal_released", "independence_war", "imperial_authority_changed":
+			"vassal_released", "independence_war", "imperial_authority_changed", \
+			"army_destroyed", "military_collapse":
 				var reason := str(e.get("reason", ""))
 				if e["kind"] == "war_declared":
 					reason = War.goal_name(int(e.get("goal", War.Goal.CONQUEST)))
 				events.append(",".join(PackedStringArray([str(world.world_seed),
 					str(e["turn"]), e["kind"], str(e["nation"]),
 					str(e.get("defender", e.get("ally", e.get("loser", e.get("vassal", -1))))),
-					reason])))
+					reason, "%.3f" % float(e.get("warscore", 0.0)),
+					str(e.get("turns", 0)), str(e.get("lost", 0)),
+					"%.5f" % float(e.get("readiness", 1.0))])))
 
 	var world_gdp := maxf(world.world_gdp(), 1.0)
-	for i in range(NationPlacer.NATION_COUNT):
+	for i in range(world.nations.size()):
 		var n: Nation = world.nations[i]
 		lines.append(",".join(PackedStringArray([
 			str(world.world_seed), str(n.id), Culture.NAMES[n.culture],
@@ -78,6 +87,9 @@ func _dump(lines: PackedStringArray, events: PackedStringArray, world: WorldStat
 				"%.5f" % n.imperial_authority, "%.3f" % n.admin_load,
 				"%.3f" % n.admin_capacity, "%.5f" % n.overextension,
 				str(n.overlord), "%.5f" % n.vassal_loyalty,
+				"%.5f" % Military.average_quality(world, n),
+				"%.5f" % n.military_readiness,
+				"%.1f" % Military.strategic_power(world, n),
 			])))
 
 
@@ -92,7 +104,7 @@ func _track_empires(world: WorldState, tracker: Dictionary, lines: PackedStringA
 		var slot: Dictionary = tracker.get(n.id, {
 			"active": false, "candidate": -1, "enter": -1, "peak": 0.0,
 		})
-		if share >= EMPIRE_THRESHOLD and not n.vassals.is_empty():
+		if share >= EmpireSystem.empire_threshold(world) and not n.vassals.is_empty():
 			if int(slot["candidate"]) < 0 and not bool(slot["active"]):
 				slot["candidate"] = world.turn
 				slot["peak"] = share

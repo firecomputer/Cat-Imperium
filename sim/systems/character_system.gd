@@ -7,13 +7,32 @@ const INITIAL_CHARACTERS_PER_NATION := 12
 ## 국가 인구 약 46,000 기준 턴당 0.128명 × 수명 145턴 = 풀 약 18.5명 —
 ## 고문석 7 + 장군 4 + 후보 여유를 채운다. 900000 은 실제 인구 규모를 위해
 ## 쓰인 값이라 이 시뮬에서는 턴당 0.05명, 턴 120에 국가당 생존 3.2명이었다.
+## 수명 115 로 늘리면서 배출률은 그대로 둔다. 430000 으로 함께 올려 정상상태 풀을
+## 맞춰 봤더니 (풀 15.7, 충원율 85%) 초반 100턴의 과도기가 얇아져 첫 파산이
+## 104 → 88.9턴으로 밀렸다 — 고문석이 비면 tax_efficiency 가 0.7 바닥에 붙는다.
+## 정상상태 풀이 약 22명으로 커지는 대신 건국기 재정을 지킨다.
 const POPULATION_PER_CHARACTER := 360000.0
-## 수명 90 + 건강(0~100) × 1.0 → 90~190. 공공의료(healthcare +0.5)가 곱해져
-## 최대 204턴이 된다. 300턴 관전에서 한 고문이 제국의 전성기를 통째로
-## 떠받칠 수 있어야 설계서 §13.4 의 "한 사람의 죽음" 이 무게를 갖는다.
-const LIFESPAN_BASE := 90.0
+## 수명 115 + 건강(0~100) × 1.0 → 115~215. 공공의료가 곱해져 최대 247턴.
+## 뛰어난 고문이 오래 앉아 있어야 인재 편차(talent_bias)가 국력 차이로 쌓인다 —
+## 수명이 짧으면 좋은 인물이 나와도 다음 세대에 평균으로 돌아간다.
+const LIFESPAN_BASE := 115.0
 const LIFESPAN_HEALTH := 1.00
 const LIFESPAN_DEVIATION := 12.0
+## 인재 기질의 표준편차. 국가마다 한 번 뽑아 능력치 평균에 그대로 더한다.
+## ±1σ 면 평균 10점 차이 — 고문 한 자리에서 army_modifier 약 3.5%p 차이가 나고
+## 일곱 자리에 걸쳐 누적된다.
+const TALENT_NATION_SIGMA := 10.0
+## 개인 편차. 16 에서 올린다. 꼬리가 두꺼워야 "이 나라에 이번 세대 명장이 났다" 가
+## 생긴다 — 편차가 좁으면 모든 나라의 최고 고문 점수가 같아진다.
+const ABILITY_DEVIATION := 20.0
+## 매파 성향의 분포. 평균 0.45 는 중립(0.5)보다 조금 낮게 둬서 개전이 세계 전체로
+## 번지지 않게 한다 — 전역 다이얼은 이미 실패했다 (WAR_POWER_EDGE 전역 인하 실험).
+const HAWKISH_MEAN := 0.45
+const HAWKISH_DEVIATION := 0.22
+## 강제 진압 선호. 매파 성향과 상관시키지 않는다 — 묶으면 매파 내각이 자동으로
+## 진압파가 되어 두 축이 하나로 무너진다.
+const SUPPRESSION_MEAN := 0.5
+const SUPPRESSION_DEVIATION := 0.22
 const NAME_DIR := "res://data/names"
 const NAME_FILES := {
 	Culture.Kind.SIAMESE: "siamese.json",
@@ -21,6 +40,13 @@ const NAME_FILES := {
 	Culture.Kind.CHEESE_TABBY: "cheese_tabby.json",
 	Culture.Kind.RUSSIAN_BLUE: "russian_blue.json",
 	Culture.Kind.KOREAN_SHORTHAIR: "korean_shorthair.json",
+	Culture.Kind.BRITISH_SHORTHAIR: "british_shorthair.json",
+	Culture.Kind.NORWEGIAN_FOREST: "norwegian_forest.json",
+	Culture.Kind.EGYPTIAN_MAU: "egyptian_mau.json",
+	Culture.Kind.PERSIAN: "persian.json",
+	Culture.Kind.BENGAL: "bengal.json",
+	Culture.Kind.TURKISH_ANGORA: "turkish_angora.json",
+	Culture.Kind.ABYSSINIAN: "abyssinian.json",
 }
 
 static var _name_sets: Dictionary = {}
@@ -32,6 +58,9 @@ static func initialize(world: WorldState) -> void:
 		return
 	var rng := world.rng_pool.get_rng("characters")
 	for n in world.nations:
+		# 인재 기질은 국가당 한 번만 뽑는다. 이후 태어나는 모든 인물이 이 편차를
+		# 물려받아, 세대가 바뀌어도 "인재가 나는 나라" 가 유지된다.
+		n.talent_bias = rng.randfn(0.0, TALENT_NATION_SIGMA)
 		for i in range(INITIAL_CHARACTERS_PER_NATION):
 			var p := _weighted_home(world, n, rng)
 			spawn_character(world, n, p, world.turn, rng, _founder_age(i))
@@ -75,12 +104,19 @@ static func spawn_character(world: WorldState, n: Nation, p: Province, turn: int
 
 	var edu := n.law_modifier("education")
 	var mean := 45.0 + edu * 22.0 + p.infra * 1.6 + (5.0 if p.has_city else 0.0)
-	var dev := 16.0 - edu * 3.0
+	mean += n.talent_bias
+	var dev := ABILITY_DEVIATION - edu * 3.0
 	c.intelligence = _roll(rng, mean + edu * 8.0, dev)
 	c.charisma = _roll(rng, mean, dev + 4.0)
 	c.creativity = _roll(rng, mean + edu * 5.0, dev + 5.0)
 	c.health = _roll(rng, 50.0 + p.gdp_pc / 90.0, 15.0)
 	c.ambition = _roll(rng, 50.0, 20.0) / 100.0
+	# 야심가는 전쟁을 부추기는 쪽으로 기운다. 성향 자체는 독립적으로 뽑는다 —
+	# 야심만으로 정하면 충성도(0.75 - ambition×0.4)와 완전히 묶여 버린다.
+	c.hawkish = clampf(rng.randfn(HAWKISH_MEAN, HAWKISH_DEVIATION) + (c.ambition - 0.5) * 0.30,
+		0.0, 1.0)
+	c.suppression_bias = clampf(
+		rng.randfn(SUPPRESSION_MEAN, SUPPRESSION_DEVIATION), 0.0, 1.0)
 	c.noble_birth = clampf(rng.randfn(0.5, 0.25), 0.0, 1.0)
 	c.loyalty = clampf(0.75 - c.ambition * 0.4 + edu * 0.1, 0.05, 1.0)
 	c.education_at_birth = edu

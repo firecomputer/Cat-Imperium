@@ -18,6 +18,11 @@ const CHANGE_RATE := 0.10                 # 한 턴 함선 증감 상한
 const BATTLE_ATTRITION := 0.15
 const MORALE_SHOCK := 1.5
 const MORALE_FLOOR := 0.1
+## 해전도 육전과 같은 규격을 쓴다 (Military.LANCHESTER_EXP / LUCK_*).
+## 한쪽만 결정론으로 두면 같은 전쟁 안에서 바다와 육지가 다른 물리를 갖는다.
+const LANCHESTER_EXP := 2.0
+const LUCK_SIGMA := 0.15
+const LUCK_FLOOR := 0.35
 const CONTROL_MARGIN := 1.15              # 통제권을 쥐려면 2위보다 이만큼 앞서야 한다
 const STRAIT_MARGIN := 1.35               # 해협은 병목이라 더 확실히 앞서야 넘어온다
 const MAX_FLEETS := 3                     # 국가당 함대 상한
@@ -284,6 +289,11 @@ static func strength(world: WorldState, f: Fleet) -> float:
 	return f.ships * f.morale * n.navy_modifier * n.military_modifier
 
 
+## 평균 1.0 의 곱셈 운. 육전 Military._luck 과 같은 규격.
+static func _luck(rng: RandomNumberGenerator) -> float:
+	return maxf(rng.randfn(1.0, LUCK_SIGMA), LUCK_FLOOR)
+
+
 static func _resolve_zone_battles(world: WorldState) -> void:
 	var by_zone := {}
 	for f in world.fleets:
@@ -315,11 +325,14 @@ static func _battle_in_zone(world: WorldState, fleets: Array[Fleet]) -> void:
 	if foe == null:
 		return
 
-	var pa := strength(world, lead)
-	var pb := strength(world, foe)
+	var rng := world.rng_pool.get_rng("naval_battle")
+	var pa := strength(world, lead) * _luck(rng)
+	var pb := strength(world, foe) * _luck(rng)
 	if pa + pb <= 0.0:
 		return
-	var ratio := pa / (pa + pb)
+	var edge_a := pow(pa, LANCHESTER_EXP)
+	var edge_b := pow(pb, LANCHESTER_EXP)
+	var ratio := edge_a / (edge_a + edge_b)
 	var loss_foe := mini(maxi(1, int(foe.ships * ratio * BATTLE_ATTRITION)), foe.ships)
 	var loss_lead := mini(maxi(1, int(lead.ships * (1.0 - ratio) * BATTLE_ATTRITION)),
 		lead.ships)

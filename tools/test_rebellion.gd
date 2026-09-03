@@ -21,6 +21,8 @@ func _initialize() -> void:
 	_test_grace_blocks_respawn_but_not_drift()
 	_test_recognition_rises_while_holding_everything()
 	_test_recognition_is_slower_at_half_control()
+	_test_recognition_stalls_under_parent_pressure()
+	_test_recognition_stalls_when_rebels_bleed()
 	_test_recognition_falls_when_pushed_out()
 	_test_recognition_target_grants_independence()
 	_test_war_age_alone_grants_nothing()
@@ -212,30 +214,64 @@ func _test_grace_blocks_respawn_but_not_drift() -> void:
 		assert(p.owner_nation == n.id,
 			"유예 중에는 새 반란이 터지지 않는다 (%d 턴째)" % i)
 	assert(p.unrest > 0.9, "유예 중에도 불만 drift 자체는 계속 계산된다")
-	Unrest.tick(world)
-	assert(p.owner_nation != n.id, "유예가 끝나면 다시 봉기할 수 있다")
+	# 유예가 풀렸다고 그 턴에 반드시 터지지는 않는다 — 봉기는 REBELLION_CHANCE
+	# 확률로만 성립한다. 검사할 것은 "유예가 막던 것이 이제 막지 않는다" 이다.
+	var fired := false
+	for i in range(60):
+		Unrest.tick(world)
+		if p.owner_nation != n.id:
+			fired = true
+			break
+	assert(fired, "유예가 끝나면 다시 봉기할 수 있다")
 
 
 # ---------------------------------------------------------------- recognition (§5)
 
 func _test_recognition_rises_while_holding_everything() -> void:
 	var world := _rebel_world()
-	var war: War = world.wars[0]
-	Peace._tick_rebel_recognition(world, war)
-	var expected := Peace.RECOGNITION_CONTROL_GAIN + Peace.RECOGNITION_CAPITAL_GAIN
-	assert(absf(war.recognition - expected) < 0.001,
-		"전 영토와 수도를 지키면 턴당 %.2f 오른다" % expected)
+	var base := Peace.RECOGNITION_CONTROL_GAIN + Peace.RECOGNITION_CAPITAL_GAIN
+	var mean := _mean_recognition_gain(world, world.wars[0])
+	assert(mean > 0.0, "전 영토와 수도를 지키면 인정도가 오른다")
+	assert(absf(mean - base * Peace.RECOGNITION_LUCK_MEAN) < 0.1,
+		"평균 증가는 %.2f 에 운 평균 %.2f 를 곱한 값이다 (실측 %.3f)" \
+			% [base, Peace.RECOGNITION_LUCK_MEAN, mean])
+	assert(mean < base, "운의 평균이 1 미만이라 고정 증가율보다 느리다")
 
 
 func _test_recognition_is_slower_at_half_control() -> void:
 	var full := _rebel_world()
-	Peace._tick_rebel_recognition(full, full.wars[0])
 	var half := _rebel_world()
 	_give(half, 4, 0)                       # 원영토 절반 상실, 수도는 유지
-	Peace._tick_rebel_recognition(half, half.wars[0])
-	assert(half.wars[0].recognition > 0.0, "절반만 쥐어도 인정도는 오른다")
-	assert(half.wars[0].recognition < full.wars[0].recognition,
-		"다만 전 영토를 지킬 때보다 느리다")
+	var full_mean := _mean_recognition_gain(full, full.wars[0])
+	var half_mean := _mean_recognition_gain(half, half.wars[0])
+	assert(half_mean > 0.0, "절반만 쥐어도 인정도는 오른다")
+	assert(half_mean < full_mean, "다만 전 영토를 지킬 때보다 느리다")
+
+
+## 모국이 원영토를 물리적으로 누르면 인정도가 느려진다. 예전에는 controller()
+## 플립만 셌기 때문에 포위도 주둔도 인정도에 한 푼도 반영되지 않았다.
+func _test_recognition_stalls_under_parent_pressure() -> void:
+	var world := _rebel_world()
+	var war: War = world.wars[0]
+	var free_mean := _mean_recognition_gain(world, war)
+	Military.create_army(world, world.nations[0], 3, 100)
+	var pressed_mean := _mean_recognition_gain(world, war)
+	assert(pressed_mean < free_mean,
+		"모국 야전군이 올라와 앉으면 인정도 증가가 느려진다 (%.3f → %.3f)" \
+			% [free_mean, pressed_mean])
+
+
+## 모국 군대가 원영토까지 못 가도, 반란군만 갈려 나가고 있으면 독립이 멀어진다.
+func _test_recognition_stalls_when_rebels_bleed() -> void:
+	var world := _rebel_world()
+	var war: War = world.wars[0]
+	var even_mean := _mean_recognition_gain(world, war)
+	war.attacker_losses = 100.0             # 모국 손실
+	war.defender_losses = 900.0             # 반란군이 사상자의 90% 를 부담
+	var bleeding_mean := _mean_recognition_gain(world, war)
+	assert(bleeding_mean < even_mean,
+		"반란군만 갈려 나가면 인정도가 오르지 않는다 (%.3f → %.3f)" \
+			% [even_mean, bleeding_mean])
 
 
 func _test_recognition_falls_when_pushed_out() -> void:
@@ -280,6 +316,18 @@ func _test_war_age_alone_grants_nothing() -> void:
 
 
 # ---------------------------------------------------------------- 도우미
+
+## 인정도 증가에는 결정론 난수가 얹혀 있다. 한 턴 값이 아니라 평균으로 본다 —
+## 한 번의 draw 로 비교하면 두 세계가 서로 다른 난수를 뽑아 결과가 뒤집힌다.
+func _mean_recognition_gain(world: WorldState, war: War, ticks: int = 400) -> float:
+	var total := 0.0
+	for i in range(ticks):
+		war.recognition = 0.0
+		Peace._tick_rebel_recognition(world, war)
+		total += war.recognition
+	war.recognition = 0.0
+	return total / float(ticks)
+
 
 func _garrison_troops(world: WorldState, n: Nation) -> int:
 	var total := 0
@@ -327,6 +375,7 @@ func _test_rebel_names_are_unique() -> void:
 
 func _world(count: int) -> WorldState:
 	var world := WorldState.new()
+	world.rng_pool = RngPool.new(109)
 	world.nations.append(_nation(0, 0))
 	for i in range(count):
 		var p := Province.new()

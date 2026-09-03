@@ -1,5 +1,7 @@
 class_name NationPlacer extends RefCounted
 
+const EmpireSystem = preload("res://sim/systems/empire_system.gd")
+
 ## 초기 국가 배치. 프로빈스 인접 그래프 위에서 수도 씨앗을 흩고 동시 확장한다.
 ## (문서에 국가 수/배치 규격이 없어 여기서 정한다)
 
@@ -17,8 +19,23 @@ const CAPITAL_TRIES_PER_NATION := 60
 ## 육로로 못 닿는 땅의 거리 환산 상한. 직선거리를 그대로 쓰면 불만(§10)과
 ## 건설비(§4.4)가 지도 크기에 비례해 터진다.
 const EXCLAVE_DIST_CAP := 12.0
-## 국명 중복 회피 재시도 횟수. 문화당 조합은 60가지, 국가는 8개다.
-const NAME_TRIES := 12
+# ---------------------------------------------------------------- 국명 칭호
+## 칭호는 규모가 정한다. 예전에는 세계 생성 때 평평한 목록에서 하나를 뽑고
+## 평생 그대로였다 — 3칸짜리 도시국가와 60칸 대제국이 똑같이 "공국" 이었다.
+enum Tier { CITY, MINOR, KINGDOM, GREAT, EMPIRE, REBEL }
+const TIER_KEYS := ["city", "minor", "kingdom", "great", "empire", "rebel"]
+## 문턱은 세계 대비 지분이다. 절대 프로빈스 수로 잡으면 국가 수가 지도 크기를
+## 따라가므로(nation_count) 큰 지도일수록 제국 정의만 저절로 가혹해진다.
+## 밑변은 EmpireSystem.empire_threshold — 제국 판정과 제국 칭호가 어긋나면 안 된다.
+const TIER_SHARE_GREAT := 0.50
+const TIER_SHARE_KINGDOM := 0.20
+## 승격 문턱의 이 비율 아래로 내려가야 강등된다. 이게 없으면 국경 한 칸이 오갈
+## 때마다 왕국↔제국 개칭이 기록을 도배한다.
+const TIER_DEMOTE_HYSTERESIS := 0.75
+## 개칭 뒤 이 턴 수 안에는 다시 바꾸지 않는다.
+const TIER_MIN_HOLD_TURNS := 20
+## 칭호 심사 주기. 매 턴 볼 값이 아니다.
+const TITLE_REVIEW_INTERVAL := 10
 ## 문화가 지리 원산에 얼마나 붙잡히는가 (§M13.6). 1.0 이면 판마다 같은 문화 지도,
 ## 0.0 이면 러시안블루가 사하라에서 시작한다. 밸런스가 아니라 취향 다이얼이라
 ## 지표에 영향이 없어야 정상이다.
@@ -58,56 +75,159 @@ static func place(provinces: Array[Province], rng: RandomNumberGenerator,
 
 ## 국명 부여. 시뮬 수치에 전혀 쓰이지 않으므로 반드시 별도 RNG 스트림으로 뽑는다 —
 ## 기존 스트림에서 뽑으면 그 뒤 모든 난수가 밀려 회귀 해시가 깨진다 (§15).
-static func assign_names(nations: Array[Nation], rng: RandomNumberGenerator) -> void:
+static func assign_names(world: WorldState, rng: RandomNumberGenerator) -> void:
 	var taken := {}
-	for n in nations:
-		n.name = _roll_name(n.culture, taken, rng)
+	for n in world.nations:
+		n.stem = _roll_stem(n.culture, rng)
+		n.title_tier = tier_of(world, n)
+		n.title_tier_turn = world.turn
+		n.name = compose_name(n.culture, n.stem, n.title_tier, n.id, taken)
+		taken[n.name] = true
 
 
-static func _roll_name(culture: int, taken: Dictionary, rng: RandomNumberGenerator) -> String:
+static func _roll_stem(culture: int, rng: RandomNumberGenerator) -> String:
+	var stems: Array = CharacterSystem.name_data(culture)["nation_stems"]
+	return str(stems[rng.randi_range(0, stems.size() - 1)])
+
+
+## 어간 + 칭호. 겹치면 같은 티어의 다른 칭호로, 그것도 다 쓰였으면 서수를 붙인다.
+## 같은 이름 둘은 관전에서 최악이다.
+static func compose_name(culture: int, stem: String, tier: int, salt: int,
+		taken: Dictionary) -> String:
 	var data := CharacterSystem.name_data(culture)
-	var stems: Array = data["nation_stems"]
-	var titles: Array = data["nation_titles"]
+	var titles := tier_titles(data, tier)
 	var separator: String = data.get("nation_separator", " ")
 	var name := ""
-	for attempt in range(NAME_TRIES):
-		var stem: String = stems[rng.randi_range(0, stems.size() - 1)]
-		var title: String = titles[rng.randi_range(0, titles.size() - 1)]
-		name = stem + separator + title
+	for k in range(maxi(titles.size(), 1)):
+		name = stem + separator + str(titles[(salt + k) % titles.size()])
 		if not taken.has(name):
-			break
-	# 조합이 다 겹치면 서수를 붙인다. 같은 이름 둘은 관전에서 최악이다.
-	if taken.has(name):
-		var ordinal := 2
-		while taken.has("%s %d세" % [name, ordinal]):
-			ordinal += 1
-		name = "%s %d세" % [name, ordinal]
-	taken[name] = true
-	return name
+			return name
+	var ordinal := 2
+	while taken.has("%s %d세" % [name, ordinal]):
+		ordinal += 1
+	return "%s %d세" % [name, ordinal]
 
 
-## 반란국 이름은 봉기가 난 지역에서 뽑는다. 새 난수를 쓰면 반란 발생 시점이
-## 다른 시스템의 난수열을 밀어 결정론이 깨지므로, 프로빈스 id 로 결정론적으로 고른다 (§15).
-static func rebel_name(nations: Array[Nation], culture: int, province_id: int) -> String:
+## 티어별 칭호 목록. 예전 스키마(평평한 배열)도 읽어 둔다 — 이름 데이터만 옛것인
+## 판이 이름 없는 나라로 시작하는 것보다는 티어가 없는 편이 낫다.
+static func tier_titles(data: Dictionary, tier: int) -> Array:
+	var titles = data.get("nation_titles", [])
+	if titles is Array:
+		return titles
+	var key: String = TIER_KEYS[clampi(tier, 0, TIER_KEYS.size() - 1)]
+	return titles.get(key, titles.get("kingdom", []))
+
+
+## 지금 규모가 부르는 티어. 반란국은 여기 오지 않는다 (Tier.REBEL 고정).
+static func tier_of(world: WorldState, n: Nation, scale: float = 1.0) -> int:
+	# 속국은 자기가 쥔 땅으로만 잰다. realm_province_count 는 realm_root 를 타므로
+	# 1칸짜리 속국도 종주국 진영 전체로 계산돼 제국 칭호를 달았다 (실측: 1200턴
+	# 917프로빈스 판에서 제국 문턱 38칸인데 제국이 31개).
+	var count := n.provinces.size() if n.overlord >= 0 \
+		else EmpireSystem.realm_province_count(world, n)
+	var tier := Tier.CITY
+	var share := float(count) / maxf(float(world.provinces.size()), 1.0)
+	var empire := EmpireSystem.empire_threshold(world) * scale
+	if count <= 1:
+		tier = Tier.CITY
+	elif share >= empire:
+		tier = Tier.EMPIRE
+	# 속국을 거느리는 것 자체가 대공국 이상이다. 크기만으로는 안 잡히는 종주국이 있다.
+	elif share >= empire * TIER_SHARE_GREAT or not n.vassals.is_empty():
+		tier = Tier.GREAT
+	elif share >= empire * TIER_SHARE_KINGDOM:
+		tier = Tier.KINGDOM
+	else:
+		tier = Tier.MINOR
+	return mini(tier, overlord_title_ceiling(world, n))
+
+
+## 속국은 종주국보다 낮은 칭호를 쓴다. 같은 칭호를 나란히 달면 지도에서
+## 누가 누구의 신하인지가 이름에서 지워진다.
+static func overlord_title_ceiling(world: WorldState, n: Nation) -> int:
+	if n.overlord < 0 or n.overlord >= world.nations.size():
+		return Tier.EMPIRE
+	var over: Nation = world.nations[n.overlord]
+	return maxi(mini(over.title_tier, Tier.EMPIRE) - 1, Tier.CITY)
+
+
+## 칭호 심사. 승격은 문턱 그대로, 강등은 그보다 낮은 선을 밑돌아야 성립한다.
+static func tick_titles(world: WorldState) -> void:
+	if world.turn % TITLE_REVIEW_INTERVAL != 0:
+		return
+	# 종주국 먼저, 속국 나중. 속국의 상한이 종주국의 이번 턴 칭호를 봐야 한다.
+	for vassal_pass in [false, true]:
+		for n in world.nations:
+			if not n.is_alive or n.is_rebel or n.stem.is_empty():
+				continue
+			if (n.overlord >= 0) != vassal_pass:
+				continue
+			# 상한 위반은 유예 대상이 아니다. 방금 복속된 나라가 유지 턴 동안
+			# 종주국과 같은 칭호를 달고 있으면 이름에서 주종이 지워진다.
+			var ceiling := overlord_title_ceiling(world, n)
+			if n.title_tier > ceiling:
+				retitle(world, n, mini(tier_of(world, n), ceiling))
+				continue
+			if world.turn - n.title_tier_turn < TIER_MIN_HOLD_TURNS:
+				continue
+			var promoted := tier_of(world, n)
+			if promoted > n.title_tier:
+				retitle(world, n, promoted)
+				continue
+			var demoted := tier_of(world, n, TIER_DEMOTE_HYSTERESIS)
+			if demoted < n.title_tier:
+				retitle(world, n, demoted)
+
+
+## 칭호를 갈아 끼운다. 어간은 그대로 둔다 — 관전자가 같은 세력임을 알아봐야 한다.
+static func retitle(world: WorldState, n: Nation, tier: int = -1) -> bool:
+	if n.stem.is_empty():
+		return false
+	var want := tier_of(world, n) if tier < 0 else tier
+	if want == n.title_tier:
+		return false
+	var taken := {}
+	for other in world.nations:                # 죽은 나라 이름도 피한다 (기록에 남는다)
+		if other.id != n.id:
+			taken[other.name] = true
+	var before := n.name
+	n.title_tier = want
+	n.title_tier_turn = world.turn
+	n.name = compose_name(n.culture, n.stem, want, n.id, taken)
+	world.log_event("title_changed", {
+		"nation": n.id,
+		"before": before,
+		"after": n.name,
+		"tier": want,
+	})
+	return true
+
+
+## 반란국의 어간과 이름. 봉기가 난 지역에서 결정론적으로 고른다 — 새 난수를 쓰면
+## 반란 발생 시점이 다른 시스템의 난수열을 밀어 결정론이 깨진다 (§15).
+static func rebel_identity(nations: Array[Nation], culture: int,
+		province_id: int) -> Dictionary:
 	var data := CharacterSystem.name_data(culture)
 	var stems: Array = data["nation_stems"]
-	var titles: Array = data["rebel_titles"]
+	var titles := tier_titles(data, Tier.REBEL)
 	var separator: String = data.get("nation_separator", " ")
 	var taken := {}
 	for n in nations:
 		taken[n.name] = true
 
-	var title: String = titles[(province_id / stems.size()) % titles.size()]
+	var title: String = str(titles[(province_id / stems.size()) % titles.size()])
+	var stem := ""
 	var name := ""
 	for k in range(stems.size()):
-		name = stems[(province_id + k) % stems.size()] + separator + title
+		stem = str(stems[(province_id + k) % stems.size()])
+		name = stem + separator + title
 		if not taken.has(name):
-			return name
+			return {"stem": stem, "name": name}
 	# 그 문화의 조합이 다 쓰였다. 서수를 붙인다 (국명 규칙과 동일).
 	var ordinal := 2
 	while taken.has("%s %d세" % [name, ordinal]):
 		ordinal += 1
-	return "%s %d세" % [name, ordinal]
+	return {"stem": stem, "name": "%s %d세" % [name, ordinal]}
 
 
 ## 문화 배치. 이번 판의 티어 정원(Culture.roll_quota)을 지리 원산에 맞춰 나눠 준다.

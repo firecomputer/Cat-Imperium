@@ -279,7 +279,7 @@ func _build_map_panel() -> Control:
 	var spacer := Control.new()
 	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	toolbar.add_child(spacer)
-	toolbar.add_child(_label("휠 확대 · 우클릭 이동 · 클릭 선택 · F 검색", 11, MUTED))
+	toolbar.add_child(_label("휠 확대 · 우클릭 이동 · F 검색", 11, MUTED))
 	box.add_child(toolbar_panel)
 
 	map_renderer = MapRendererScript.new()
@@ -372,6 +372,9 @@ func _build_nation_tab() -> Control:
 	nation_detail.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	nation_detail.add_theme_color_override("default_color", TEXT)
 	nation_detail.add_theme_font_size_override("normal_font_size", 13)
+	nation_detail.meta_clicked.connect(_on_log_meta_clicked)
+	nation_detail.meta_hover_started.connect(_on_log_meta_hover)
+	nation_detail.meta_hover_ended.connect(_on_log_meta_hover_end)
 	box.add_child(nation_detail)
 	return margin
 
@@ -548,6 +551,7 @@ func _on_province_selected(province_id: int) -> void:
 	selected_province = province_id
 	selected_nation = world.provinces[province_id].owner_nation
 	market_selected[Market.AssetKind.PROVINCE] = province_id
+	map_renderer.set_diplomacy_focus(selected_nation)
 	if selected_nation >= 0:
 		market_selected[Market.AssetKind.BOND] = selected_nation
 		var best := _best_character_for(selected_nation)
@@ -661,6 +665,8 @@ func _refresh_nation() -> void:
 	lines.append(_stat("평균 불만", "%.0f%%" % (n.avg_unrest * 100.0)))
 	lines.append(_stat("육군 / 함선", "%s / %d" % [
 		_short(Military.total_troops(world, n)), Naval.total_ships(world, n)]))
+	lines.append(_stat("전쟁 지지도", "%.0f%%%s" % [n.war_support * 100.0,
+		" · 평시 %d턴" % n.peace_streak_turns if n.peace_streak_turns > 0 else ""]))
 	lines.append(_stat("전쟁 / 동맹", "%d / %d" % [n.wars.size(), n.allies.size()]))
 	var root: Nation = world.nations[EmpireSystem.realm_root(world, n.id)]
 	lines.append(_stat("직할 / 속국", "%d / %d" % [n.provinces.size(), root.vassals.size()]))
@@ -682,13 +688,16 @@ func _refresh_nation() -> void:
 		lines.append(_stat("인프라 / 1인 GDP", "%.2f / %s" % [p.infra, _short(p.gdp_pc)]))
 		lines.append(_stat("불만 / 보급", "%.0f%% / %.0f%%" % [
 			p.unrest * 100.0, p.supply * 100.0]))
-		lines.append(_stat("통합도", "%.0f%%" % (p.integration * 100.0)))
+		lines.append(_stat("통합도 / 분리주의", "%.0f%% / %.0f%%" % [
+			p.integration * 100.0, p.separatism * 100.0]))
 		lines.append(_stat("성장 여력", "%+.1f%%" % (Market.growth_headroom(p) * 100.0)))
 		if p.occupied_by_nation >= 0:
 			lines.append(_stat("점령", _nation_name(p.occupied_by_nation)))
 		if p.siege_by_nation >= 0 and p.siege_progress > 0.0:
 			lines.append(_stat("공성", "%s %.0f%%" % [
 				_nation_name(p.siege_by_nation), p.siege_progress]))
+
+	lines.append_array(_diplomacy_lines(n, root))
 
 	var laws := PackedStringArray()
 	for category in Law.CATEGORIES:
@@ -712,6 +721,68 @@ func _refresh_nation() -> void:
 		lines.append("[color=#8fa2b5]핵심 고문[/color]")
 		lines.append_array(advisors)
 	nation_detail.text = "\n".join(lines)
+
+
+## 전쟁·동맹·속국·휴전. 개수만 보여 주던 자리에서 상대가 누구인지까지 읽히게 한다 —
+## 예전에는 "전쟁 2" 만 있어서 누구와 싸우는지 알 방법이 지도를 뒤지는 것뿐이었다.
+func _diplomacy_lines(n: Nation, root: Nation) -> PackedStringArray:
+	var out := PackedStringArray()
+	var wars := PackedStringArray()
+	for war_id in n.wars:
+		var war: War = world.wars[war_id]
+		if not war.is_active:
+			continue
+		var enemies := PackedStringArray()
+		for enemy_id in war.enemies_of(n.id):
+			enemies.append(_nation_link(int(enemy_id)))
+		var goal := "반란 진압" if war.is_rebel_war and war.parent_nation_id == n.id \
+			else ("독립 전쟁" if war.is_rebel_war else War.goal_name(war.goal))
+		wars.append("vs %s  [color=#8fa2b5]%s · %d턴[/color]" % [
+			" · ".join(enemies), goal, world.turn - war.start_turn])
+		if war.is_rebel_war:
+			wars.append("  [color=#8fa2b5]독립 인정도[/color] %.0f%%" % war.recognition)
+			continue
+		# 전황은 언제나 이 나라 기준이다. war.warscore 는 공격 진영 기준값이다.
+		var score := war.warscore * (1.0 if war.side_of(n.id) > 0 else -1.0)
+		var mine := war.occupied_value_attacker if war.side_of(n.id) > 0 \
+			else war.occupied_value_defender
+		var theirs := war.occupied_value_defender if war.side_of(n.id) > 0 \
+			else war.occupied_value_attacker
+		var quiet := world.turn - war.last_progress_turn
+		var stalled := "  [color=#ef6f7b]· 교전 %d턴째 없음[/color]" % quiet \
+			if quiet >= Peace.GHOST_WAR_TURNS / 3 else ""
+		wars.append("  [color=#8fa2b5]전황[/color] %+.0f  [color=#8fa2b5]점령[/color] %s ↔ %s%s" % [
+			score, _short(mine), _short(theirs), stalled])
+	if not wars.is_empty():
+		out.append("")
+		out.append("[color=#8fa2b5]전쟁[/color]")
+		out.append_array(wars)
+
+	var ties := PackedStringArray()
+	for ally_id in n.allies:
+		ties.append("[color=#8fa2b5]동맹[/color] %s · 갱신 %d턴 뒤" % [_nation_link(ally_id),
+			maxi(int(n.alliance_expiry.get(ally_id, world.turn)) - world.turn, 0)])
+	if n.overlord >= 0:
+		ties.append("[color=#8fa2b5]종주국[/color] %s · 충성 %.0f%%" % [
+			_nation_link(n.overlord), n.vassal_loyalty * 100.0])
+	for vassal_id in root.vassals:
+		if vassal_id >= world.nations.size():
+			continue
+		ties.append("[color=#8fa2b5]속국[/color] %s · 충성 %.0f%%" % [
+			_nation_link(vassal_id), world.nations[vassal_id].vassal_loyalty * 100.0])
+	var truces: Array = n.truces.keys()
+	truces.sort()
+	for other_id in truces:
+		var left := int(n.truces[other_id]) - world.turn
+		if left <= 0:
+			continue
+		ties.append("[color=#8fa2b5]휴전[/color] %s · %d턴 남음" % [
+			_nation_link(int(other_id)), left])
+	if not ties.is_empty():
+		out.append("")
+		out.append("[color=#8fa2b5]외교[/color]")
+		out.append_array(ties)
+	return out
 
 
 ## [table] BBCode 는 한 번 파싱에 수십 ms 가 든다. 매 턴 갱신하는 패널에는 쓰지 않는다.
@@ -1115,6 +1186,9 @@ func _event_text(event: Dictionary) -> String:
 		"national_default":
 			return prefix + "[color=#ef6f7b]국가 파산[/color]  %s" % \
 				_nation_link(int(event.get("nation", -1)))
+		"title_changed":
+			return prefix + "[color=#f2b84b]개칭[/color]  %s → %s" % [
+				str(event.get("before", "")), _nation_link(int(event.get("nation", -1)))]
 		"city_founded":
 			return prefix + "[color=#5dd39e]도시 탄생[/color]  %s · %s" % [
 				_nation_link(int(event.get("nation", -1))),

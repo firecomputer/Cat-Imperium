@@ -38,13 +38,30 @@ const RECRUIT_READINESS_FLOOR := 0.20
 # ---------------------------------------------------------------- 전쟁 지지도 (M14 §4)
 ## 사상자가 지지도를 깎는 비율. military_readiness 와 같은 밑변(force_base)을 쓴다 —
 ## 두 수치가 같은 전투에서 함께 무너져야 "대군을 갈아 넣은 나라"가 하나의 상태가 된다.
-const SUPPORT_LOSS_PER_FORCE := 0.60
+## 0.60 에서는 아래 승전·점령 이득(P1)이 붙자 양측이 나란히 지지도를 유지해
+## 전쟁만 9% 늘고 최대국은 오히려 작아졌다 (40시드 짝비교, top_realm t=-2.2).
+## 0.90 은 먼저 갈린 쪽이 실제로 먼저 꺼지게 만든다 — 패자 국토 60% 소진 뒤
+## 끝나는 전쟁 82.6% → 85.4% (t=6.2), 45턴+ 장기전 18.9% → 17.8% (t=-2.5).
+## 1.20 까지 올리면 양쪽이 함께 못 싸워 장기전 감소가 유의하지 않다.
+const SUPPORT_LOSS_PER_FORCE := 0.90
 ## 동원 속도. 지지도 0 이면 절반, 1 이면 1.3 배.
 const SUPPORT_MOBILIZE_MIN := 0.5
 const SUPPORT_MOBILIZE_MAX := 1.3
 ## 야전군 편성 속도. 지지도 1.0 = 턴당 1개, 0.0 = 5턴당 1개 (M14 §3).
 const SPAWN_RATE_MIN := 0.2
 const SPAWN_RATE_MAX := 1.0
+## 전시 지지도 이득. 지지도가 사상자로만 움직이면 소모전에서 양측이 나란히
+## 0 으로 내려가 동원·편성이 함께 죽고 전선이 영원히 굳는다. 이기는 쪽은
+## 되돌려 받아야 우열이 벌어지고 한쪽이 국토를 갈아 들어갈 수 있다.
+const SUPPORT_BATTLE_WIN := 0.015
+const SUPPORT_OCCUPY_GAIN := 0.02
+## 본토를 잃는 것은 사상자와 별개의 정치적 타격이다.
+const SUPPORT_PROVINCE_LOST := 0.03
+## 자국 영토에서 싸운 손실은 덜 깎인다 — 방어전은 여론을 결집시킨다.
+const SUPPORT_HOME_LOSS_MULT := 0.6
+## war_resolve 1.0 인 내각은 같은 사상자에 40% 덜 잃고 같은 승전에 60% 더 얻는다.
+const RESOLVE_LOSS_MIN := 0.6
+const RESOLVE_GAIN_MAX := 1.6
 ## 자국 땅에서의 교전이 진압으로 세어지는 최소 불만. 국경 소전투까지 물리면
 ## 대외전쟁만으로 본토가 갈라진다 — 눌러야 할 땅을 누른 경우만 잡는다.
 const SUPPRESSION_UNREST_MIN := 0.30
@@ -253,8 +270,11 @@ static func _register_force_loss(world: WorldState, army: Army, casualties: int,
 	var force_base := maxf(maxf(manpower_cap(n), float(force_before)), 1.0)
 	n.military_readiness = maxf(READINESS_MIN,
 		n.military_readiness - float(casualties) / force_base * READINESS_LOSS_PER_FORCE)
+	var support_loss := SUPPORT_LOSS_PER_FORCE * support_loss_mult(n)
+	if army.province_id >= 0 and world.provinces[army.province_id].owner_nation == n.id:
+		support_loss *= SUPPORT_HOME_LOSS_MULT
 	n.war_support = maxf(n.war_support
-		- float(casualties) / force_base * SUPPORT_LOSS_PER_FORCE, 0.0)
+		- float(casualties) / force_base * support_loss, 0.0)
 	if destroyed and float(army.peak_troops) / force_base >= CATASTROPHIC_FORCE_SHARE:
 		var before := n.military_readiness
 		n.military_readiness = minf(n.military_readiness, CATASTROPHIC_READINESS)
@@ -344,6 +364,7 @@ static func _record_battle(world: WorldState, a: Army, b: Army,
 	var war := Diplomacy.war_between(world, a.nation_id, b.nation_id)
 	if war == null:
 		return
+	war.last_progress_turn = world.turn
 	var a_won := float(result["power_a"]) >= float(result["power_b"])
 	var winner_side := war.side_of(a.nation_id) if a_won else war.side_of(b.nation_id)
 	if winner_side > 0:
@@ -354,6 +375,10 @@ static func _record_battle(world: WorldState, a: Army, b: Army,
 		else "casualties_b"])
 	war.defender_losses += float(result["casualties_b" if war.side_of(a.nation_id) > 0 \
 		else "casualties_a"])
+	# 진압전 승리는 지지도를 돌려주지 않는다 (M14 §4, EmpireSystem 승전 보정과 같은 이유).
+	if not war.is_rebel_war:
+		gain_war_support(world.nations[a.nation_id if a_won else b.nation_id],
+			SUPPORT_BATTLE_WIN)
 
 
 ## 전멸이 아니라 붕괴로 전투가 끝난다. 물러난 군대는 다시 싸울 수 있다.
@@ -430,6 +455,8 @@ static func tick_sieges(world: WorldState) -> void:
 		p.siege_progress += siege_rate(p, army)
 		# 반란군이 쥔 땅을 포위하는 것도, 빼앗긴 자국 땅을 되찾는 것도 진압이다.
 		var war := Diplomacy.war_between(world, army.nation_id, holder)
+		if war != null:
+			war.last_progress_turn = world.turn
 		if (war != null and war.is_rebel_war) or p.owner_nation == army.nation_id:
 			Unrest.register_suppression(world, p, Unrest.SEPARATISM_COMBAT)
 		if p.siege_progress >= 100.0:
@@ -476,8 +503,15 @@ static func occupy(world: WorldState, p: Province, occupier: Nation) -> void:
 	if p.occupied_by_nation >= 0:
 		# 조약 때 "한 번이라도 밟은 땅"으로 남는다 (§P1). 반란전은 협상 대상이 아니다.
 		var claim_war := Diplomacy.war_between(world, occupier.id, owner.id)
-		if claim_war != null and not claim_war.is_rebel_war:
-			claim_war.occupied_ever[p.id] = occupier.id
+		if claim_war != null:
+			claim_war.last_progress_turn = world.turn
+			if not claim_war.is_rebel_war:
+				claim_war.occupied_ever[p.id] = occupier.id
+				# 진격은 여론을 되돌리고 본토 상실은 여론을 꺾는다. 진압전은
+				# 지나지 않는다 — 반란 진압이 전쟁 수행 능력을 돌려주면
+				# 제국이 무너지는 경로가 막힌다 (M14 §4).
+				gain_war_support(occupier, SUPPORT_OCCUPY_GAIN)
+				owner.war_support = maxf(owner.war_support - SUPPORT_PROVINCE_LOST, 0.0)
 	owner.supply_dirty = true
 	occupier.supply_dirty = true
 	world.log_event("province_liberated" if p.occupied_by_nation < 0 else "province_occupied", {
@@ -553,6 +587,17 @@ const QUALITY_UPKEEP_SHARE := 0.25
 const RECRUIT_QUALITY := 1.0
 
 
+## 승전·점령이 돌려주는 지지도. 내각이 강할수록 같은 승리를 더 크게 쓴다.
+static func gain_war_support(n: Nation, amount: float) -> void:
+	n.war_support = minf(n.war_support
+		+ amount * lerpf(1.0, RESOLVE_GAIN_MAX, n.war_resolve), 1.0)
+
+
+## 사상자가 지지도를 깎는 비율에 걸리는 내각 보정.
+static func support_loss_mult(n: Nation) -> float:
+	return lerpf(1.0, RESOLVE_LOSS_MIN, n.war_resolve)
+
+
 ## 지지도가 높은 나라는 같은 준비도로 더 빨리 동원한다 (M14 §4).
 static func mobilization_mult(n: Nation) -> float:
 	return lerpf(SUPPORT_MOBILIZE_MIN, SUPPORT_MOBILIZE_MAX,
@@ -599,7 +644,16 @@ static func quality_upkeep_mult(quality: float) -> float:
 
 ## 징병 법률은 사기의 기준선도 정한다. 강제 징집병은 애초에 사기가 낮다.
 static func base_morale(n: Nation) -> float:
-	return clampf(1.0 + n.law_modifier("army_morale"), MORALE_MIN_BASE, MORALE_MAX_BASE)
+	var law := clampf(1.0 + n.law_modifier("army_morale"), MORALE_MIN_BASE, MORALE_MAX_BASE)
+	return maxf(law * support_morale_mult(n), MORALE_MIN_BASE)
+
+
+## 지지도가 사기의 천장이다. 0.7(평시 기본값)에서 1.0 이라 평시에는 아무 변화도
+## 없고, 소모전으로 여론이 무너진 쪽만 깎인다 — 버프는 없다. 사기가 꺼진 군대는
+## RETREAT_MORALE 아래에서 전선을 비우고, 그 자리로 공성이 통과한다. 지지도 격차가
+## 점수가 아니라 영토로 번역되는 지점이다.
+static func support_morale_mult(n: Nation) -> float:
+	return clampf(0.65 + n.war_support * 0.5, 0.65, 1.0)
 
 
 ## 모병·해산을 처리하고 이번 턴 군사비를 돌려준다. 정산은 credit.tick() 이 한다.

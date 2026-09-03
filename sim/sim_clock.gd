@@ -30,6 +30,7 @@ static func tick(world: WorldState) -> void:
 	Peace.tick(world)                  # 13. 전쟁 점수·강화 판정
 	Economy.aggregate(world)           # 13.5 강화조약이 옮긴 땅을 집계에 반영
 	EmpireSystem.tick(world)           # 13.6 통합·행정·권위·속국 충성
+	NationPlacer.tick_titles(world)    # 13.7 국명 칭호 갱신 (표시 전용, 시뮬 무영향)
 	Market.tick(world)                 # 14. 투자 가격·배당·포트폴리오 기록
 	# 15. 이벤트 전달은 뷰 호스트가 world.events 를 단방향으로 읽는다.
 	world.turn += 1

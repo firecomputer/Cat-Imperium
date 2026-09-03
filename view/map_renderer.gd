@@ -1,6 +1,7 @@
 class_name HexMapRenderer extends Control
 
 const EmpireSystem = preload("res://sim/systems/empire_system.gd")
+const NationPalette = preload("res://view/nation_palette.gd")
 
 ## M9 헥스 지도. 15,000개 타일 중 육지 5,000개만 그리며, 시뮬 상태를 읽기만 한다.
 ##
@@ -14,17 +15,31 @@ signal province_selected(province_id: int)
 ## 교전 마커를 직접 집었을 때. 프로빈스 선택과 별개로 전투 패널을 연다.
 signal battle_selected(province_id: int)
 
-enum MapMode { POLITICAL, GDP, INFRA, UNREST, SUPPLY, NAVAL }
+enum MapMode { POLITICAL, DIPLOMACY, CULTURE, GDP, INFRA, UNREST, SEPARATISM,
+	SUPPLY, NAVAL }
 
-const MODE_NAMES := ["국가", "경제", "인프라", "불만", "보급", "제해권"]
+const MODE_NAMES := ["국가", "외교", "문화", "경제", "인프라", "불만", "분리주의",
+	"보급", "제해권"]
+## 문화 12종(M13.7-a) 색상. 국가색이 문화를 버렸으므로 이 hue 표는 문화 레이어의
+## 것이 됐다 — 문화당 한 색이라 12개면 충분하고 서로 안 겹친다.
+const CULTURE_HUES := [
+	0.09, 0.50, 0.04, 0.63, 0.34,          # 샴 랙돌 치즈태비 러시안블루 코리안숏헤어
+	0.56, 0.71, 0.14, 0.87, 0.21, 0.44, 0.78,
+]
+## 외교 레이어. 기준국에서 본 관계 하나가 색 하나다.
+const DIPLO_SELF := Color("f2e2b0")
+const DIPLO_VASSAL := Color("b99a4e")
+const DIPLO_OVERLORD := Color("8f7bd6")
+const DIPLO_ALLY := Color("4f9ee8")
+const DIPLO_WAR := Color("d64550")
+const DIPLO_TRUCE := Color("d98e46")
+const DIPLO_NEUTRAL := Color("3c4658")
 const WATER := Color("101d2e")
 const WATER_GRID := Color("1b3048")
 const GRID := Color(0.025, 0.04, 0.065, 0.42)
 const BORDER := Color(0.02, 0.03, 0.05, 0.75)
 const NATION_BORDER := Color(0.86, 0.90, 0.95, 0.55)
 const FRONT := Color("ff5964")
-## 속국 채움 명도. 직할령(0.78)보다 어둡게 두어 같은 색 안에서 구분된다.
-const VASSAL_VALUE := 0.62
 const SELECTED := Color("ffd166")
 const HOVERED := Color("f4f1de")
 const HIGHLIGHT := Color("ffffff")
@@ -36,6 +51,14 @@ const ZONE_FILL_MIX := 0.72
 ## 제해권 지도에서는 바다가 주인공이다. 육지는 어둡게 깔아 뒤로 물린다.
 const NAVAL_LAND_DIM := 0.55
 const HEX_RADIUS := 0.57735027
+
+## 국명 라벨. 색만으로는 100국이 넘는 지도를 못 가른다 — 이름이 최종 답이다.
+## 화면에서 이만한 폭을 못 차지하는 나라는 그리지 않는다. 절대 줌이 아니라
+## 나라 크기 × 배율로 재야 큰 나라부터 순서대로 이름이 뜬다.
+const LABEL_MIN_EXTENT_PX := 44.0
+const LABEL_FONT_SIZE := 12
+const LABEL_TEXT := Color(0.97, 0.98, 1.0, 0.92)
+const LABEL_OUTLINE := Color(0.02, 0.03, 0.05, 0.88)
 
 ## 논리 단위(헥스 반지름 0.577 기준) 선 굵기.
 const GRID_WIDTH := 0.022
@@ -54,6 +77,8 @@ const GRID_MIN_UNIT := 9.0
 
 var world: WorldState
 var mode: int = MapMode.POLITICAL
+## 외교 레이어의 기준국. 여기서 본 관계로 온 지도를 칠한다. -1 이면 회색 한 장이다.
+var diplomacy_focus := -1
 var show_war := true
 var selected_province: int = -1
 var hovered_province: int = -1
@@ -87,7 +112,11 @@ var _zone_line_b := PackedInt32Array()
 var _zone_line_colors := PackedColorArray()   # 변 하나당 색. 제해권 국가색으로 칠한다
 var _tile_to_zone := PackedInt32Array()
 
+## 국가 색. 한 번 정해지면 그 나라가 죽을 때까지 바뀌지 않는다 (nation_palette.gd).
+var _palette = NationPalette.new()
+
 # 턴마다 갱신되는 캐시
+var _nation_labels: Array = []                # {pos(논리), text, extent}
 var _nation_lines := PackedVector2Array()
 var _vassal_lines := PackedVector2Array()
 var _vassal_colors := PackedColorArray()
@@ -170,6 +199,7 @@ func set_world(value: WorldState) -> void:
 		for z in world.sea_zones:
 			for tile: int in z.tiles:
 				_tile_to_zone[tile] = z.id
+	_palette.sync(world)
 	_build_geometry()
 	_colors_dirty = true
 	_edges_dirty = true
@@ -179,6 +209,20 @@ func set_world(value: WorldState) -> void:
 
 func set_mode(value: int) -> void:
 	mode = clampi(value, MapMode.POLITICAL, MapMode.NAVAL)
+	_repaint()
+
+
+## 외교 레이어는 "누구를 기준으로 보는가"에 통째로 달려 있다. 기준국이 바뀌면
+## 색 캐시를 통째로 버려야 한다 — 프로빈스는 그대로인데 뜻이 달라진 경우다.
+func set_diplomacy_focus(nation_id: int) -> void:
+	if diplomacy_focus == nation_id:
+		return
+	diplomacy_focus = nation_id
+	if mode == MapMode.DIPLOMACY:
+		_repaint()
+
+
+func _repaint() -> void:
 	_last_zone_color.fill(Color(0, 0, 0, 0))
 	_last_color.fill(Color(0, 0, 0, 0))
 	_colors_dirty = true
@@ -192,6 +236,7 @@ func set_show_war(value: bool) -> void:
 
 ## 시뮬이 한 턴 이상 진행된 뒤 뷰 호스트가 부른다. 여기서만 캐시를 무효화한다.
 func on_world_advanced() -> void:
+	_palette.sync(world)
 	_colors_dirty = true
 	_edges_dirty = true
 	_war_dirty = true
@@ -522,7 +567,42 @@ func _rebuild_edges() -> void:
 			_occupied_edges.append(_edge_points[e * 2])
 			_occupied_edges.append(_edge_points[e * 2 + 1])
 			_occupied_colors.append(color)
+	_rebuild_labels()
 	_rebuild_highlight()
+
+
+## 국명 라벨의 자리와 크기. 이름 폭은 화면 배율을 타므로 여기서는 논리 좌표와
+## 나라 크기만 정하고, 그릴지 말지는 _draw_labels 가 배율을 곱해 판단한다.
+func _rebuild_labels() -> void:
+	_nation_labels = []
+	if world == null:
+		return
+	for n in world.nations:
+		if not n.is_alive or n.provinces.is_empty():
+			continue
+		var tiles := 0
+		var mean := Vector2.ZERO
+		for pid: int in n.provinces:
+			var p: Province = world.provinces[pid]
+			tiles += p.size()
+			mean += p.centroid * float(p.size())
+		if tiles <= 0:
+			continue
+		mean /= float(tiles)
+		# 말굽 모양 나라는 무게중심이 바다나 남의 땅에 떨어진다. 자기 땅 중 가장
+		# 가까운 프로빈스로 당겨 이름이 언제나 자기 영토 위에 놓이게 한다.
+		var anchor := mean
+		var best := INF
+		for pid: int in n.provinces:
+			var d := world.provinces[pid].centroid.distance_squared_to(mean)
+			if d < best:
+				best = d
+				anchor = world.provinces[pid].centroid
+		_nation_labels.append({
+			"pos": anchor,
+			"text": n.name,
+			"extent": sqrt(float(tiles)),
+		})
 
 
 func _rebuild_highlight() -> void:
@@ -751,6 +831,29 @@ func _draw_overlay(layer: Control) -> void:
 		_draw_province_outline(layer, hovered_province, HOVERED,
 			_line_width(0.09, PROVINCE_MIN_PX, scale))
 	layer.draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+	_draw_labels(layer, scale)
+
+
+## 이름은 화면 좌표에 그린다. 지도 변환 안에서 그리면 글자까지 배율을 타고
+## 커져 확대할수록 화면이 글자로 덮인다.
+func _draw_labels(layer: Control, scale: float) -> void:
+	var font := get_theme_default_font()
+	if font == null:
+		return
+	for label in _nation_labels:
+		if float(label["extent"]) * scale < LABEL_MIN_EXTENT_PX:
+			continue
+		var text: String = label["text"]
+		var extent := font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1,
+			LABEL_FONT_SIZE)
+		var at := _screen_from_logical(label["pos"]) - Vector2(extent.x * 0.5, 0.0)
+		if at.x + extent.x < 0.0 or at.x > layer.size.x \
+				or at.y < 0.0 or at.y - extent.y > layer.size.y:
+			continue
+		layer.draw_string_outline(font, at, text, HORIZONTAL_ALIGNMENT_LEFT, -1,
+			LABEL_FONT_SIZE, 4, LABEL_OUTLINE)
+		layer.draw_string(font, at, text, HORIZONTAL_ALIGNMENT_LEFT, -1,
+			LABEL_FONT_SIZE, LABEL_TEXT)
 
 
 func _draw_war(layer: Control, scale: float) -> void:
@@ -869,6 +972,16 @@ func _multiline(layer: Control, points: PackedVector2Array, color: Color,
 
 func _province_color(p: Province) -> Color:
 	match mode:
+		MapMode.DIPLOMACY:
+			return _diplomacy_color(p.controller())
+		MapMode.CULTURE:
+			if p.culture < 0:
+				return Color("2a3240")
+			return Color.from_hsv(CULTURE_HUES[p.culture % CULTURE_HUES.size()],
+				0.55, 0.78)
+		MapMode.SEPARATISM:
+			return Color("1e2233").lerp(Color("f6ae2d"),
+				clampf(p.separatism, 0.0, 1.0))
 		MapMode.GDP:
 			var value := clampf(log(1.0 + maxf(p.gdp_pc, 0.0)) / log(4081.0), 0.0, 1.0)
 			return Color("372f5f").lerp(Color("5ee6a8"), value)
@@ -890,27 +1003,35 @@ func _province_color(p: Province) -> Color:
 	return color
 
 
-## 속국은 종주국과 같은 색상(hue)을 쓰고 명도만 낮춘다. 중첩 속국은 없으므로
-## (EmpireSystem.vassalize) 한 홉이면 realm 최상위에 닿는다.
+## 기준국에서 본 관계 한 가지. 전쟁·동맹·속국은 패널의 목록으로도 읽히지만,
+## "그게 지도 어디인가"는 이 레이어만 답한다.
+func _diplomacy_color(nation_id: int) -> Color:
+	if world == null or nation_id < 0 or nation_id >= world.nations.size() \
+			or diplomacy_focus < 0 or diplomacy_focus >= world.nations.size():
+		return DIPLO_NEUTRAL
+	if nation_id == diplomacy_focus:
+		return DIPLO_SELF
+	var focus: Nation = world.nations[diplomacy_focus]
+	if Diplomacy.are_at_war(world, diplomacy_focus, nation_id):
+		return DIPLO_WAR
+	if nation_id in focus.vassals:
+		return DIPLO_VASSAL
+	if nation_id == focus.overlord:
+		return DIPLO_OVERLORD
+	if nation_id in focus.allies:
+		return DIPLO_ALLY
+	if focus.truces.has(nation_id):
+		return DIPLO_TRUCE
+	return DIPLO_NEUTRAL
+
+
+## 속국도 자기 색을 그대로 쓴다. 예전에는 종주국 색을 명도만 낮춰 물려줬는데,
+## 독립하는 순간 색이 통째로 바뀌어 그 나라를 눈으로 따라가던 것이 끊겼다.
+## 종주국 소속은 _vassal_lines 의 테두리가 답한다.
 func _nation_color(nation_id: int) -> Color:
 	if world == null or nation_id < 0 or nation_id >= world.nations.size():
-		return Color("596777")
-	var n: Nation = world.nations[nation_id]
-	var root := n
-	var is_vassal := false
-	if n.overlord >= 0 and n.overlord < world.nations.size() \
-			and world.nations[n.overlord].is_alive:
-		root = world.nations[n.overlord]
-		is_vassal = true
-	# 문화 12종(M13.7-a) 색상. 기존 5종의 hue 는 그대로 두고 신설 7종만 빈 구간에 넣는다.
-	var culture_hues := [
-		0.09, 0.50, 0.04, 0.63, 0.34,          # 샴 랙돌 치즈태비 러시안블루 코리안숏헤어
-		0.56, 0.71, 0.14, 0.87, 0.21, 0.44, 0.78,
-	]
-	var hue: float = fmod(float(culture_hues[root.culture % culture_hues.size()])
-		+ root.id * 0.047, 1.0)
-	var saturation := 0.58 if not n.is_rebel else 0.82
-	return Color.from_hsv(hue, saturation, VASSAL_VALUE if is_vassal else 0.78)
+		return NationPalette.FALLBACK
+	return _palette.color_of(nation_id)
 
 
 # --- 입력 -----------------------------------------------------------------

@@ -32,6 +32,7 @@ static func declare_war(world: WorldState, attacker: Nation, defender: Nation,
 	var war := War.new()
 	war.id = world.wars.size()
 	war.start_turn = world.turn
+	war.last_progress_turn = world.turn
 	war.primary_attacker = attacker.id
 	war.primary_defender = defender.id
 	war.goal = goal
@@ -89,6 +90,10 @@ static func end_war(world: WorldState, war: War, reason: String,
 		restore: bool = true) -> void:
 	if not war.is_active:
 		return
+	# 종전 시점의 국토 소진 비율. _release_occupations 가 점령을 되돌리기 전에 읽어야
+	# "60% 게이트에 실제로 닿고 끝난 전쟁인가" 를 배치 CSV 에서 셀 수 있다.
+	var consumed_attackers := Peace.consumed_ratio(world, war, war.attackers)
+	var consumed_defenders := Peace.consumed_ratio(world, war, war.defenders)
 	war.is_active = false
 	if restore:
 		_release_occupations(world, war)
@@ -104,6 +109,8 @@ static func end_war(world: WorldState, war: War, reason: String,
 		"warscore": war.warscore,
 		"turns": world.turn - war.start_turn,
 		"reason": reason,
+		"consumed_attackers": consumed_attackers,
+		"consumed_defenders": consumed_defenders,
 	})
 
 

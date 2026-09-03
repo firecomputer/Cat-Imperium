@@ -27,6 +27,8 @@ func _initialize() -> void:
 	_test_recognition_target_grants_independence()
 	_test_war_age_alone_grants_nothing()
 	_test_rebel_names_are_unique()
+	_test_independence_retitles_the_rebel()
+	_test_ghost_rebel_war_is_decided_by_ground()
 	_test_integration_relieves_structural_unrest()
 	_test_reclaim_lowers_integration()
 	print("rebellion tests: PASS")
@@ -373,6 +375,44 @@ func _test_rebel_names_are_unique() -> void:
 		"반란국 이름은 봉기 지역에서 나온다 — 모국 이름을 물려받지 않는다")
 
 
+## 독립이 인정되면 봉기군이 아니라 나라다. 어간은 남기고 칭호만 바뀐다 —
+## 예전에는 300턴이 지나 제국 크기가 되어도 이름이 "봉기군" 이었다.
+func _test_independence_retitles_the_rebel() -> void:
+	var world := _rebel_world()
+	var war: War = world.wars[0]
+	var rebel: Nation = world.nations[war.rebel_nation_id]
+	var before := rebel.name
+	assert(rebel.title_tier == NationPlacer.Tier.REBEL, "반란국은 반란 칭호로 시작한다")
+	assert(not rebel.stem.is_empty(), "반란국도 어간을 들고 있어야 개칭할 수 있다")
+	war.recognition = Peace.REBEL_RECOGNITION_TARGET - 0.5
+	Peace.tick(world)
+	assert(not rebel.is_rebel, "인정된 반란국은 더 이상 반란 세력이 아니다")
+	assert(rebel.title_tier != NationPlacer.Tier.REBEL, "칭호가 정식 국가로 바뀐다")
+	assert(rebel.name != before, "이름이 실제로 바뀌어야 한다")
+	assert(rebel.name.begins_with(rebel.stem),
+		"어간은 그대로 남아 같은 세력임이 읽혀야 한다")
+
+
+## 교전도 인정도 진행도 멈춘 반란전은 어느 시계로도 끝나지 않았다 —
+## 실측에서 1200턴 판에 1068턴짜리 반란전이 살아 있었다.
+func _test_ghost_rebel_war_is_decided_by_ground() -> void:
+	var world := _rebel_world(5)
+	var war: War = world.wars[0]
+	# 반란군이 원영토의 20% 만 쥐면 인정도는 오르지 않는다 — 시계가 멈춘다.
+	for pid in range(4, 8):
+		_give(world, pid, 0)
+	world.turn = Peace.GHOST_WAR_TURNS
+	Peace.tick(world)
+	assert(not war.is_active, "멈춘 반란전은 원영토를 쥔 쪽으로 결착된다")
+
+	var living := _rebel_world(5)
+	living.turn = Peace.GHOST_WAR_TURNS * 3
+	Peace.tick(living)
+	assert(living.wars[0].is_active, "인정도가 오르는 반란전은 유령이 아니다")
+	assert(living.wars[0].last_progress_turn == living.turn,
+		"인정도 상승이 진행 턴을 갱신한다")
+
+
 func _world(count: int) -> WorldState:
 	var world := WorldState.new()
 	world.rng_pool = RngPool.new(109)
@@ -405,6 +445,11 @@ func _rebel_world(size: int = 2) -> WorldState:
 	var rebel := _nation(1, 3)
 	rebel.is_rebel = true
 	rebel.rebel_origin = 0
+	# Unrest.spawn_new_rebellion 과 같은 정체성을 준다. 어간이 없으면 개칭이 불가능하다.
+	var identity := NationPlacer.rebel_identity(world.nations, rebel.culture, 3)
+	rebel.stem = identity["stem"]
+	rebel.name = identity["name"]
+	rebel.title_tier = NationPlacer.Tier.REBEL
 	world.nations.append(rebel)
 	var origin := PackedInt32Array()
 	for i in range(3, 3 + size):

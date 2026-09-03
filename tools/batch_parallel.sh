@@ -6,6 +6,10 @@
 # batch_sim 은 시드 seed0+i 로 런을 독립 생성하므로 구간을 나눠도 결과가 같다.
 # 모든 CSV 행이 seed 열을 갖기 때문에 단순 이어붙이기로 합쳐진다.
 # 인식하지 못한 옵션은 그대로 batch_sim 에 넘긴다.
+#
+# 동시 실행 수는 MAX_JOBS(기본 8)로 강제 제한된다. 예전 기본값은 nproc 이라
+# 배치 하나가 전 코어와 8GB 를 먹고 기계를 멈춰 세웠다. 넘겨도 잘린다.
+# 정말로 풀로 돌려야 하면 CAT_IMPERIUM_ALLOW_HEAVY=1 을 명시해야 한다.
 
 set -uo pipefail
 cd "$(dirname "$0")/.."
@@ -15,6 +19,7 @@ TURNS=600
 SEED0=1
 OUT="res://out/parallel.csv"
 JOBS=""
+SCRIPT="res://tools/batch_sim.gd"
 PASS=()
 
 while [ $# -gt 0 ]; do
@@ -24,12 +29,25 @@ while [ $# -gt 0 ]; do
 		--seed0) SEED0=$2; shift 2 ;;
 		--out)   OUT=$2; shift 2 ;;
 		--jobs)  JOBS=$2; shift 2 ;;
+		--script) SCRIPT=$2; shift 2 ;;
 		*)       PASS+=("$1"); shift ;;
 	esac
 done
 
-[ -z "$JOBS" ] && JOBS=$(nproc)
+MAX_JOBS=${MAX_JOBS:-8}
+CORES=$(nproc)
+[ "$MAX_JOBS" -gt "$CORES" ] && MAX_JOBS=$CORES
+[ -z "$JOBS" ] && JOBS=$MAX_JOBS
+if [ "${CAT_IMPERIUM_ALLOW_HEAVY:-0}" != "1" ] && [ "$JOBS" -gt "$MAX_JOBS" ]; then
+	echo "--- jobs $JOBS 요청 → $MAX_JOBS 로 제한 (코어 $CORES). 해제: CAT_IMPERIUM_ALLOW_HEAVY=1"
+	JOBS=$MAX_JOBS
+fi
 [ "$JOBS" -gt "$RUNS" ] && JOBS=$RUNS
+[ "$JOBS" -lt 1 ] && JOBS=1
+
+# 배치는 언제나 대화형 작업에 자리를 내준다.
+NICE=(nice -n 19)
+command -v ionice > /dev/null && NICE=(ionice -c 3 nice -n 19)
 
 OUT_LOCAL=${OUT#res://}
 OUT_DIR=$(dirname "$OUT_LOCAL")
@@ -46,7 +64,7 @@ for ((j = 0; j < JOBS; j++)); do
 	n=$base
 	[ "$j" -lt "$extra" ] && n=$((base + 1))
 	[ "$n" -eq 0 ] && continue
-	godot --headless --script res://tools/batch_sim.gd -- \
+	"${NICE[@]}" godot --headless --script "$SCRIPT" -- \
 		--runs "$n" --turns "$TURNS" --seed0 "$seed" \
 		--out "res://$SHARD_DIR/s$j.csv" "${PASS[@]+"${PASS[@]}"}" \
 		> "$SHARD_DIR/s$j.log" 2>&1 &
@@ -60,13 +78,13 @@ for pid in "${pids[@]}"; do
 done
 
 # CSV 5종을 각각 합친다. 헤더는 첫 샤드 것만 남긴다.
-for suffix in "" _defaults _credit_events _nations _empires; do
+for suffix in "" _defaults _credit_events _nations _empires _events; do
 	target="$OUT_DIR/$STEM$suffix.csv"
 	: > "$target"
 	first=1
 	for f in "$SHARD_DIR"/s*"$suffix".csv; do
 		# 접미사 없는 본 파일 루프에서 파생 파일이 함께 잡히지 않게 거른다.
-		if [ -z "$suffix" ] && [[ "$f" =~ _(defaults|credit_events|nations|empires)\.csv$ ]]; then
+		if [ -z "$suffix" ] && [[ "$f" =~ _(defaults|credit_events|nations|empires|events)\.csv$ ]]; then
 			continue
 		fi
 		[ -f "$f" ] || continue

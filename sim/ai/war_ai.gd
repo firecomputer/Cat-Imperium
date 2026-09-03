@@ -19,8 +19,6 @@ const RETREAT_TROOP_RATIO := 0.35         # 최대 병력 대비 이 아래면 �
 const RECOVER_MORALE := 0.65              # 이 사기를 되찾기 전에는 전선에 돌아가지 않는다
 const STARVE_SUPPLY := 0.15               # 이 아래로 굶으면 목표를 버리고 물러난다
 const LANDING_MORALE := 0.85              # 상륙 직후 사기 배율. 바다를 건너는 건 공짜가 아니다
-## 바다 한 칸은 승선 1턴 + 상륙 1턴이다. 경로 비교에서 육로 두 칸과 같은 값을 쓴다.
-const SEA_HOPS := 2.0
 ## 적 야전군이 서 있는 전선을 홉 환산으로 이만큼 당겨온다. 빈 적지를 밟는 것보다
 ## 적 부대를 잡는 것이 먼저다 — 이게 없으면 양쪽 군대가 서로를 지나쳐 영토만
 ## 맞바꾼다 (실측: 내 땅에 앉은 적군의 83% 가 아무도 안 붙은 채 공성했다).
@@ -166,19 +164,16 @@ static func _fronts(world: WorldState, n: Nation,
 			if Diplomacy.are_at_war(world, n.id, holder):
 				seen[nb] = true
 				out.append(nb)
-		# 제해권을 쥔 바다 건너 적지도 전선이다. 이게 없으면 육로가 닿지 않는
-		# 섬 반란은 진압군이 목표로 삼지도 못해 100% 독립한다 (M8.5 §2.1).
-		for zone_id: int in p.sea_zone_ids:
-			if not n.naval_control_zones.has(zone_id):
+		# 이어진 통제 해역 건너 적지도 전선이다. 출발 해안과 목표가 같은 해역을
+		# 공유해야 한다고 제한하면, 제해권을 연속으로 쥐고도 먼 섬을 목표로 삼지 못한다.
+		for landing: int in _sea_landings(world, n, pid):
+			var target: Province = world.provinces[landing]
+			var owner := target.controller()
+			if owner < 0 or owner == n.id or seen.has(landing):
 				continue
-			for landing: int in world.sea_zones[zone_id].coast_provinces:
-				var target: Province = world.provinces[landing]
-				var owner := target.controller()
-				if owner < 0 or owner == n.id or seen.has(landing):
-					continue
-				if Diplomacy.are_at_war(world, n.id, owner):
-					seen[landing] = true
-					out.append(landing)
+			if Diplomacy.are_at_war(world, n.id, owner):
+				seen[landing] = true
+				out.append(landing)
 	# 적진 깊숙이 들어간 아군 옆의 적 야전군. 본토에 접한 칸만 전선으로 세우면
 	# 국경에서 밀려난 적은 한 칸 물러나는 것만으로 추격을 벗어난다 — 회복해서
 	# 다시 나오는 일이 반복되어 전쟁이 소모전으로만 끝난다.
@@ -488,12 +483,13 @@ static func _withdraw(world: WorldState, n: Nation, army: Army) -> void:
 	})
 
 
-## 승선. 한 턴을 바다에서 보내고 다음 턴에 내린다 — 그 사이 제해권을 잃으면 격침이다.
-## 이 한 턴이 "제해권을 쥐어야 바다를 건넌다"를 관전에서 읽히게 만든다 (§12.4).
+## 승선. 해역마다 한 턴씩 이동하고 마지막 해역에서 다음 턴에 내린다.
+## 항로의 제해권을 잃으면 격침된다 (§12.4).
 static func _embark(world: WorldState, n: Nation, army: Army, target: int) -> void:
-	var zone := _crossing_zone(world, n, army.province_id, target)
-	if zone < 0:
+	var route := _crossing_route(world, n, army.province_id, target)
+	if route.is_empty():
 		return                                # 제해권을 잃었으면 그 자리에 선다
+	var zone: int = route[0]
 	world.remove_army_index(army.id, army.province_id)
 	world.log_event("embarked", {
 		"nation": n.id,
@@ -509,22 +505,64 @@ static func _embark(world: WorldState, n: Nation, army: Army, target: int) -> vo
 	army.province_id = -1
 
 
-## 양쪽 연안이 공유하는 해역 중 내가 제해권을 쥔 것. 동점은 id 가 낮은 쪽 (§15).
-static func _crossing_zone(world: WorldState, n: Nation, from: int, to: int) -> int:
-	var shared: Array[int] = []
-	for zone_id: int in world.provinces[from].sea_zone_ids:
-		if not n.naval_control_zones.has(zone_id):
+## 두 연안을 잇는 최단 통제 해역 경로. 시작·이웃 해역을 id 순으로 훑어 동률을 깬다 (§15).
+static func _crossing_route(world: WorldState, n: Nation, from: int,
+		to: int) -> PackedInt32Array:
+	return _sea_route(world, n, world.provinces[from].sea_zone_ids,
+		world.provinces[to].sea_zone_ids)
+
+
+static func _sea_route(world: WorldState, n: Nation, starts: PackedInt32Array,
+		goals: PackedInt32Array) -> PackedInt32Array:
+	var goal_set := {}
+	for zone_id: int in goals:
+		if zone_id >= 0 and zone_id < world.sea_zones.size():
+			goal_set[zone_id] = true
+	if goal_set.is_empty():
+		return PackedInt32Array()
+
+	var seeds: Array[int] = []
+	for zone_id: int in starts:
+		if zone_id < 0 or zone_id >= world.sea_zones.size() \
+				or not n.naval_control_zones.has(zone_id) or zone_id in seeds:
 			continue
-		if zone_id in world.provinces[to].sea_zone_ids:
-			shared.append(zone_id)
-	if shared.is_empty():
-		return -1
-	shared.sort()
-	return shared[0]
+		seeds.append(zone_id)
+	seeds.sort()
+	var prev := {}
+	var queue: Array[int] = []
+	for zone_id in seeds:
+		prev[zone_id] = -1
+		queue.append(zone_id)
+
+	var found := -1
+	var head := 0
+	while head < queue.size():
+		var cur: int = queue[head]
+		head += 1
+		if goal_set.has(cur):
+			found = cur
+			break
+		var neighbors: Array = Array(world.sea_zones[cur].neighbors)
+		neighbors.sort()
+		for nb: int in neighbors:
+			if prev.has(nb) or not n.naval_control_zones.has(nb):
+				continue
+			prev[nb] = cur
+			queue.append(nb)
+	if found < 0:
+		return PackedInt32Array()
+
+	var reversed: Array[int] = []
+	var cur := found
+	while cur >= 0:
+		reversed.append(cur)
+		cur = int(prev[cur])
+	reversed.reverse()
+	return PackedInt32Array(reversed)
 
 
-## 바다에 떠 있는 부대를 먼저 처리한다. 아직 그 바다를 쥐고 있으면 내리고,
-## 뺏겼으면 수송선단째 가라앉는다.
+## 바다에 떠 있는 부대를 먼저 처리한다. 목표 연안까지 통제 해역이 더 남았으면
+## 한 해역 전진하고, 마지막 해역이면 내린다. 항로가 끊기면 수송선단째 가라앉는다.
 static func _resolve_landings(world: WorldState, n: Nation) -> void:
 	for army_id in n.armies:
 		var a: Army = world.armies[army_id]
@@ -533,6 +571,17 @@ static func _resolve_landings(world: WorldState, n: Nation) -> void:
 		var zone := a.at_sea_zone
 		if not n.naval_control_zones.has(zone):
 			_sink(world, a, zone)
+			continue
+		if a.landing_target < 0 or a.landing_target >= world.provinces.size():
+			_sink(world, a, zone)
+			continue
+		var route := _sea_route(world, n, PackedInt32Array([zone]),
+			world.provinces[a.landing_target].sea_zone_ids)
+		if route.is_empty():
+			_sink(world, a, zone)
+			continue
+		if route.size() > 1:
+			a.at_sea_zone = route[1]
 			continue
 		a.province_id = a.landing_target
 		a.at_sea_zone = -1
@@ -576,10 +625,15 @@ static func _next_step(world: WorldState, n: Nation, from: int, to: int) -> int:
 	var prev := _bfs(world, n, from, to)
 	if not prev.has(to):
 		return -1
-	var cur := to
-	while int(prev[cur]) != from:
-		cur = int(prev[cur])
-	return cur
+	var reverse_path: Array[int] = [to]
+	while int(prev[reverse_path.back()]) != from:
+		reverse_path.append(int(prev[reverse_path.back()]))
+	reverse_path.reverse()
+	var province_count := world.provinces.size()
+	for node in reverse_path:
+		if node < province_count:
+			return node                         # 바다 노드를 건너 첫 상륙지를 돌려준다
+	return -1
 
 
 static func _hops(world: WorldState, n: Nation, from: int, to: int) -> float:
@@ -591,9 +645,8 @@ static func _hops(world: WorldState, n: Nation, from: int, to: int) -> float:
 	var steps := 0.0
 	var cur := to
 	while cur != from:
-		var back := int(prev[cur])
-		steps += SEA_HOPS if _is_sea_step(world, back, cur) else 1.0
-		cur = back
+		steps += 1.0                         # 승선·해역 이동·상륙이 각각 한 홉이다
+		cur = int(prev[cur])
 	return steps
 
 
@@ -604,16 +657,10 @@ static func _reachable(world: WorldState, n: Nation, from: int) -> Dictionary:
 	if from < 0:
 		return seen
 	seen[from] = true
-	var queue: Array[int] = [from]
-	var head := 0
-	while head < queue.size():
-		var cur: int = queue[head]
-		head += 1
-		for nb: int in _neighbors(world, n, cur):
-			if seen.has(nb) or not _passable(world, n, nb):
-				continue
-			seen[nb] = true
-			queue.append(nb)
+	var prev := _bfs(world, n, from, -1)
+	for node in prev:
+		if int(node) < world.provinces.size():
+			seen[int(node)] = true
 	return seen
 
 
@@ -625,10 +672,10 @@ static func _bfs(world: WorldState, n: Nation, from: int, to: int) -> Dictionary
 	while head < queue.size():
 		var cur: int = queue[head]
 		head += 1
-		if cur == to:
+		if to >= 0 and cur == to:
 			break
-		for nb: int in _neighbors(world, n, cur):
-			if seen.has(nb) or not _passable(world, n, nb):
+		for nb: int in _graph_neighbors(world, n, cur):
+			if seen.has(nb):
 				continue
 			seen[nb] = true
 			prev[nb] = cur
@@ -636,20 +683,78 @@ static func _bfs(world: WorldState, n: Nation, from: int, to: int) -> Dictionary
 	return prev
 
 
-## 육상 인접 + 제해권을 쥔 **같은 해역**의 연안. 해역은 지도의 한 조각이라
-## 상륙이 근해 도하가 된다 — 예전처럼 지구 반대편으로 1홉 순간이동하지 않는다.
+## 프로빈스와 해역을 한 그래프로 펼친 이웃. 육로는 1홉, 같은 해역 도하는
+## 승선+상륙 2홉, 해역을 하나 더 지날 때마다 1홉이 더 든다.
+static func _graph_neighbors(world: WorldState, n: Nation, node: int) -> Array[int]:
+	var province_count := world.provinces.size()
+	var out: Array[int] = []
+	if node < province_count:
+		var p: Province = world.provinces[node]
+		for nb: int in p.land_neighbors:
+			if _passable(world, n, nb):
+				out.append(nb)
+		if p.controller() == n.id:             # 발판이 없으면 배를 탈 수 없다
+			for zone_id: int in p.sea_zone_ids:
+				if n.naval_control_zones.has(zone_id):
+					out.append(province_count + zone_id)
+	else:
+		var zone_id := node - province_count
+		if zone_id < 0 or zone_id >= world.sea_zones.size() \
+				or not n.naval_control_zones.has(zone_id):
+			return out
+		for nb: int in world.sea_zones[zone_id].neighbors:
+			if n.naval_control_zones.has(nb):
+				out.append(province_count + nb)
+		for landing: int in world.sea_zones[zone_id].coast_provinces:
+			if _passable(world, n, landing):
+				out.append(landing)
+	out.sort()
+	return out
+
+
+## 육상 인접 + 이어진 통제 해역의 모든 연안. 실제 최단 경로는 _bfs 가 해역 노드를
+## 따로 세어 계산하고, 이 함수는 전선·억류처럼 도달 가능 여부만 필요한 곳에서 쓴다.
 static func _neighbors(world: WorldState, n: Nation, pid: int) -> Array[int]:
 	var p: Province = world.provinces[pid]
 	var out: Array[int] = []
 	out.append_array(p.land_neighbors)
+	out.append_array(_sea_landings(world, n, pid))
+	return out
+
+
+static func _sea_landings(world: WorldState, n: Nation, pid: int) -> Array[int]:
+	var out: Array[int] = []
+	var p: Province = world.provinces[pid]
 	if p.controller() != n.id:
-		return out                                # 발판이 없으면 배를 탈 수 없다
-	for zone_id: int in p.sea_zone_ids:
-		if not n.naval_control_zones.has(zone_id):
+		return out
+	var queue: Array[int] = []
+	var seen_zones := {}
+	var starts: Array = Array(p.sea_zone_ids)
+	starts.sort()
+	for zone_id: int in starts:
+		if zone_id < 0 or zone_id >= world.sea_zones.size() \
+				or not n.naval_control_zones.has(zone_id) or seen_zones.has(zone_id):
 			continue
+		seen_zones[zone_id] = true
+		queue.append(zone_id)
+	var seen_landings := {pid: true}
+	var head := 0
+	while head < queue.size():
+		var zone_id: int = queue[head]
+		head += 1
 		for landing: int in world.sea_zones[zone_id].coast_provinces:
-			if landing != pid:
-				out.append(landing)
+			if seen_landings.has(landing):
+				continue
+			seen_landings[landing] = true
+			out.append(landing)
+		var adjacent: Array = Array(world.sea_zones[zone_id].neighbors)
+		adjacent.sort()
+		for nb: int in adjacent:
+			if seen_zones.has(nb) or not n.naval_control_zones.has(nb):
+				continue
+			seen_zones[nb] = true
+			queue.append(nb)
+	out.sort()
 	return out
 
 

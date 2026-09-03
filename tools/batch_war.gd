@@ -26,7 +26,8 @@ func _initialize() -> void:
 		+ "imperial_authority,admin_load,admin_capacity,overextension,overlord,vassal_loyalty,"
 		+ "army_quality,military_readiness,strategic_power"])
 	var event_lines := PackedStringArray([
-		"seed,turn,kind,nation,other,reason,warscore,duration,lost,readiness"])
+		"seed,turn,kind,nation,other,reason,warscore,duration,lost,readiness,"
+		+ "consumed_attackers,consumed_defenders"])
 	var empire_lines := PackedStringArray([
 		"seed,nation,enter_turn,exit_turn,duration,peak_realm_share,reason"])
 	var t0 := Time.get_ticks_msec()
@@ -70,7 +71,9 @@ func _dump(lines: PackedStringArray, events: PackedStringArray, world: WorldStat
 					str(e.get("defender", e.get("ally", e.get("loser", e.get("vassal", -1))))),
 					reason, "%.3f" % float(e.get("warscore", 0.0)),
 					str(e.get("turns", 0)), str(e.get("lost", 0)),
-					"%.5f" % float(e.get("readiness", 1.0))])))
+					"%.5f" % float(e.get("readiness", 1.0)),
+					"%.5f" % float(e.get("consumed_attackers", -1.0)),
+					"%.5f" % float(e.get("consumed_defenders", -1.0))])))
 
 	var world_gdp := maxf(world.world_gdp(), 1.0)
 	for i in range(world.nations.size()):

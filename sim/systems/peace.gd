@@ -19,6 +19,12 @@ const SUBJUGATION_SCORE := 55.0           # 전 국토 병합보다 낮지만 35
 const INDEPENDENCE_SCORE := 55.0
 const SUBJUGATION_EXHAUSTION_TURNS := 45
 const PARTIAL_PEACE_SCORE := 20.0
+## 야전 전투·공성 진행·점령이 이만큼 없으면 유령전쟁이다. 전선이 닿지 않는
+## 참전국(먼 동맹의 방어 소집)이나 상호 진입 문턱 교착은 점수도 소모율도 밀지
+## 못해 아래 SETTLE_CONSUMED_RATIO 게이트에 영원히 닿지 않는다. 시간만 흐르는
+## 전쟁은 종전 자격을 기다리지 않고 여기서 끊는다. MIN_WAR_TURNS 보다 커야
+## 개전 직후 행군 턴이 유령으로 잡히지 않는다.
+const GHOST_WAR_TURNS := 15
 ## 종전 자격. 지는 진영이 참전 시 프로빈스의 이 비율 이상을 실제로 잃기 전에는
 ## 어떤 강화 경로도 열리지 않는다 — 점수만 채운 조기 종전과 45턴 소진 백지평화를
 ## 함께 막는다. 잃었다는 것은 소유권이 넘어갔거나 지금 적에게 점령당한 상태다.
@@ -162,7 +168,7 @@ static func update_warscore(world: WorldState, war: War) -> void:
 
 ## 참전 시점 영토 중 지금 손을 떠난 비율 (0~1). 소유권이 넘어갔거나 적에게
 ## 점령당한 칸을 함께 센다 — 전쟁이 실제로 국토를 갈아 먹었는지의 척도다.
-static func _consumed_ratio(world: WorldState, war: War, ids: Array[int]) -> float:
+static func consumed_ratio(world: WorldState, war: War, ids: Array[int]) -> float:
 	var total := 0
 	var lost := 0
 	for nid in ids:
@@ -179,7 +185,7 @@ static func _consumed_ratio(world: WorldState, war: War, ids: Array[int]) -> flo
 ## 종전 자격. 지는 쪽 국토가 대부분 갈려 나가야 협상 테이블이 열린다.
 static func _can_settle(world: WorldState, war: War, attacker_won: bool) -> bool:
 	var loser_ids := war.defenders if attacker_won else war.attackers
-	return _consumed_ratio(world, war, loser_ids) >= SETTLE_CONSUMED_RATIO
+	return consumed_ratio(world, war, loser_ids) >= SETTLE_CONSUMED_RATIO
 
 
 static func _weariness(world: WorldState, ids: Array[int]) -> float:
@@ -197,6 +203,17 @@ static func _consider_peace(world: WorldState, war: War) -> void:
 		_tick_rebel_war(world, war, length)
 		return
 	if length < MIN_WAR_TURNS:
+		return
+
+	# 아무 일도 일어나지 않는 전쟁은 종전 자격(_can_settle)을 기다리지 않는다.
+	# 소진 백지평화까지 그 게이트 뒤에 있어서, 서로 밀지 못하는 전쟁에는
+	# 탈출구가 하나도 없었다.
+	if world.turn - war.last_progress_turn >= GHOST_WAR_TURNS:
+		if absf(war.warscore) >= PARTIAL_PEACE_SCORE:
+			_settle(world, war, war.warscore > 0.0)
+			return
+		Diplomacy.end_war(world, war, "stalemate")
+		_truce_all(world, war)
 		return
 
 	# 35점은 패자가 협상에 응하는 시점일 뿐 승자가 만족하는 시점은 아니다.
@@ -247,6 +264,15 @@ static func _tick_rebel_war(world: WorldState, war: War, length: int) -> void:
 	_tick_rebel_recognition(world, war)
 	if war.recognition >= REBEL_RECOGNITION_TARGET:
 		_resolve_rebel_independence(world, war)
+		return
+	# 4. 유령 반란전. 교전도 인정도 진행도 멈춘 반란전은 어느 시계로도 끝나지
+	#    않는다 — 서로 닿지 못한 채 1068턴을 흘려보낸 판이 실측으로 나왔다.
+	#    누가 원영토를 쥐고 있느냐로 결착한다 (일반전이 warscore 부호로 가르는 것과 같다).
+	if world.turn - war.last_progress_turn >= GHOST_WAR_TURNS:
+		if rebel_warscore(world, war) >= 0.0:
+			_resolve_rebel_defeat(world, war, "stalemate_suppressed")
+		else:
+			_resolve_rebel_independence(world, war)
 
 
 ## -100 ~ +100. 양수는 모국 우세. 각 항을 독립적으로 clamp 한다 (§3.3).
@@ -299,6 +325,10 @@ static func _tick_rebel_recognition(world: WorldState, war: War) -> void:
 		gain -= RECOGNITION_LOSING_PENALTY
 	if ratio <= RECOGNITION_COLLAPSE_RATIO:
 		gain -= RECOGNITION_COLLAPSE_PENALTY
+	# 인정도가 오르고 있다면 그 전쟁은 유령이 아니다. 반란전에는 교전 말고도
+	# 결말로 가는 시계가 하나 더 있고, 그것이 도는 한 끊을 이유가 없다.
+	if gain > 0.0:
+		war.last_progress_turn = world.turn
 	war.recognition = clampf(war.recognition + gain, 0.0, REBEL_RECOGNITION_TARGET)
 
 
@@ -356,7 +386,12 @@ static func _resolve_rebel_defeat(world: WorldState, war: War, result: String) -
 ## 독립 인정. 이후로는 일반 국가다 — 미승인국 상태를 따로 만들지 않는다 (§5.5).
 static func _resolve_rebel_independence(world: WorldState, war: War) -> void:
 	log_rebel_war_end(world, war, "independence_recognized")
-	world.nations[war.rebel_nation_id].is_rebel = false
+	var rebel: Nation = world.nations[war.rebel_nation_id]
+	rebel.is_rebel = false
+	# 독립이 인정된 순간부터는 봉기군이 아니라 나라다. 어간은 그대로 두어 같은
+	# 세력임이 읽히게 하고 칭호만 규모에 맞춰 바꾼다 — 예전에는 300턴 뒤에도
+	# "봉기군" 이 제국 크기로 앉아 있었다.
+	NationPlacer.retitle(world, rebel)
 	Diplomacy.end_war(world, war, "independence_recognized")
 	_truce_all(world, war)
 

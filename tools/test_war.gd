@@ -32,6 +32,7 @@ func _initialize() -> void:
 	_test_warscore_follows_occupation()
 	_test_loser_offer_does_not_force_winner_to_settle()
 	_test_settlement_requires_consumed_territory()
+	_test_ghost_war_ends_without_progress()
 	_test_demands_prefer_connected_land()
 	_test_annexed_exclave_pays_the_price()
 	_test_crushing_subjugation_takes_land()
@@ -249,9 +250,12 @@ func _test_any_force_advances_a_siege() -> void:
 	Military.create_army(world, world.nations[0], 1, 1)
 	Military.create_army(world, world.nations[1], 1, 100)
 	world.rebuild_army_index()
+	world.turn = 30
 	Military.tick_sieges(world)
 	assert(world.provinces[1].siege_progress > 0.0,
 		"소수 공성군과 더 큰 방어군이 함께 있어도 공성은 진행된다")
+	assert(world.wars[0].last_progress_turn == world.turn,
+		"공성 진행도 전쟁이 살아 있다는 증거다")
 
 
 ## 공성의 주인은 나라가 아니라 진영이다. 같은 편 두 나라가 한 칸에 서면 예전에는
@@ -440,6 +444,8 @@ func _test_loser_offer_does_not_force_winner_to_settle() -> void:
 	var prolonged := _two_nations()
 	var prolonged_war: War = prolonged.wars[0]
 	prolonged.turn = 45
+	# 싸우고 있는 전쟁이다. 진행 턴을 갱신해 유령전쟁 탈출구를 닫고 피로 경로만 본다.
+	prolonged_war.last_progress_turn = prolonged.turn
 	prolonged.provinces[1].occupied_by_nation = 0
 	prolonged_war.warscore = Peace.PARTIAL_PEACE_SCORE
 	Peace._consider_peace(prolonged, prolonged_war)
@@ -448,6 +454,7 @@ func _test_loser_offer_does_not_force_winner_to_settle() -> void:
 
 	var stalemate := _two_nations()
 	stalemate.turn = Peace.EXHAUSTION_TURNS
+	stalemate.wars[0].last_progress_turn = stalemate.turn
 	Peace._consider_peace(stalemate, stalemate.wars[0])
 	assert(stalemate.wars[0].is_active,
 		"국토가 갈리지 않은 교착은 45턴 피로선에서도 끝나지 않는다")
@@ -456,6 +463,26 @@ func _test_loser_offer_does_not_force_winner_to_settle() -> void:
 	Peace._consider_peace(stalemate, stalemate.wars[0])
 	assert(not stalemate.wars[0].is_active,
 		"국토를 소진한 교착은 첫 45턴 피로선에서 백지평화로 끝낸다")
+
+
+## 야전 전투도 공성도 점령도 없는 전쟁은 종전 자격(SETTLE_CONSUMED_RATIO)을
+## 기다리지 않는다. 전선이 닿지 않는 참전국과 상호 진입 문턱 교착이 이 상태를
+## 만들고, 예전에는 소진 백지평화까지 그 게이트 뒤에 있어 탈출구가 없었다.
+func _test_ghost_war_ends_without_progress() -> void:
+	var world := _two_nations()
+	var war: War = world.wars[0]
+	world.turn = Peace.GHOST_WAR_TURNS - 1
+	Peace._consider_peace(world, war)
+	assert(war.is_active, "유령 판정 전에는 국토 소진 게이트가 그대로 걸린다")
+	world.turn = Peace.GHOST_WAR_TURNS
+	Peace._consider_peace(world, war)
+	assert(not war.is_active, "아무 일도 일어나지 않는 전쟁은 국토를 못 갈아도 끝난다")
+
+	var fighting := _two_nations()
+	fighting.turn = Peace.GHOST_WAR_TURNS * 4
+	fighting.wars[0].last_progress_turn = fighting.turn - Peace.GHOST_WAR_TURNS + 1
+	Peace._consider_peace(fighting, fighting.wars[0])
+	assert(fighting.wars[0].is_active, "최근에 전투가 있었으면 유령전쟁이 아니다")
 
 
 ## 전쟁은 점수가 아니라 국토로 끝난다 — 지는 쪽 영토의 대부분이 갈려 나가기

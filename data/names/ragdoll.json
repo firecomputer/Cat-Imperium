@@ -2,26 +2,95 @@
   "order": "given_family",
   "separator": " ",
   "family": [
-    "Ashford", "Bennett", "Brooks", "Campbell", "Carter", "Darcy", "Everett",
-    "Fletcher", "Gray", "Hawthorne", "Hughes", "Marlow", "Morgan", "Parker",
-    "Reed", "Sawyer", "Sinclair", "Spencer", "Taylor", "Whitaker"
+    "Ashford",
+    "Bennett",
+    "Brooks",
+    "Campbell",
+    "Carter",
+    "Darcy",
+    "Everett",
+    "Fletcher",
+    "Gray",
+    "Hawthorne",
+    "Hughes",
+    "Marlow",
+    "Morgan",
+    "Parker",
+    "Reed",
+    "Sawyer",
+    "Sinclair",
+    "Spencer",
+    "Taylor",
+    "Whitaker"
   ],
   "given": [
-    "Abigail", "Alice", "Arthur", "Beatrice", "Clara", "Edmund", "Eleanor",
-    "Elliot", "Evelyn", "Felix", "Florence", "Hazel", "Henry", "Iris",
-    "Jasper", "Julian", "Lillian", "Mabel", "Oliver", "Oscar", "Phoebe",
-    "Rowan", "Theodore", "Violet"
+    "Abigail",
+    "Alice",
+    "Arthur",
+    "Beatrice",
+    "Clara",
+    "Edmund",
+    "Eleanor",
+    "Elliot",
+    "Evelyn",
+    "Felix",
+    "Florence",
+    "Hazel",
+    "Henry",
+    "Iris",
+    "Jasper",
+    "Julian",
+    "Lillian",
+    "Mabel",
+    "Oliver",
+    "Oscar",
+    "Phoebe",
+    "Rowan",
+    "Theodore",
+    "Violet"
   ],
   "nation_separator": " ",
   "nation_stems": [
-    "Ashvale", "Bramblewick", "Cloverfield", "Duncroft", "Elmsworth",
-    "Fairholt", "Greywater", "Hollowmere", "Larkspur", "Mossbourne",
-    "Thornbury", "Windermere"
+    "Ashvale",
+    "Bramblewick",
+    "Cloverfield",
+    "Duncroft",
+    "Elmsworth",
+    "Fairholt",
+    "Greywater",
+    "Hollowmere",
+    "Larkspur",
+    "Mossbourne",
+    "Thornbury",
+    "Windermere"
   ],
-  "nation_titles": [
-    "왕국", "연합", "공화국", "자치령", "대공국"
-  ],
-  "rebel_titles": [
-    "봉기군", "해방전선", "자유동맹", "저항군", "독립파"
-  ]
+  "nation_titles": {
+    "city": [
+      "도시국가",
+      "자치령"
+    ],
+    "minor": [
+      "공국",
+      "백작령"
+    ],
+    "kingdom": [
+      "왕국",
+      "공화국"
+    ],
+    "great": [
+      "대공국",
+      "연합"
+    ],
+    "empire": [
+      "제국",
+      "종주제국"
+    ],
+    "rebel": [
+      "봉기군",
+      "해방전선",
+      "자유동맹",
+      "저항군",
+      "독립파"
+    ]
+  }
 }

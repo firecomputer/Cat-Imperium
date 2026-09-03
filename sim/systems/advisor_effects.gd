@@ -61,6 +61,10 @@ static func apply_nation(world: WorldState, n: Nation) -> void:
 	n.tax_efficiency = 0.7 + economic * 0.5
 	n.credit_bonus = economic * 0.15
 
+	# 전쟁 지지도의 버팀목. 여론을 다루는 정치 내각이 주고, 군사 고문이 보탠다.
+	# 고문석이 비면 0 = 중립이라 아무 배율도 걸리지 않는다.
+	n.war_resolve = clampf(political * 0.6 + military * 0.4, 0.0, 1.0)
+
 	n.army_modifier = 1.0 + military * 0.35
 	n.supply_range_mult = 1.0 + military * 0.30
 	n.military_modifier = n.bankruptcy_military_mult

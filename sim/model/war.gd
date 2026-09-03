@@ -11,6 +11,10 @@ var defenders: Array[int] = []
 var primary_attacker: int = -1
 var primary_defender: int = -1
 var start_turn: int = 0
+## 이 전쟁에서 마지막으로 무언가가 실제로 일어난 턴 — 야전 전투·공성 진행·점령.
+## 셋 다 멈춘 전쟁은 warscore 도 소모율도 움직이지 못해 종전 자격
+## (Peace._can_settle)에 영원히 닿지 못한다. Peace 가 그런 전쟁을 끊는 근거다.
+var last_progress_turn: int = 0
 var is_active: bool = true
 var goal: int = Goal.CONQUEST
 var goal_score: float = 35.0
@@ -29,7 +33,7 @@ var occupied_ever: Dictionary = {}
 
 ## 참전 시점의 프로빈스 목록 (Nation id -> PackedInt32Array). 전쟁은 국토가 실제로
 ## 갈려 나가야 끝난다 — 개전 시 영토 중 지금 손을 떠난 비율을 종전 자격으로 쓴다
-## (Peace._consumed_ratio).
+## (Peace.consumed_ratio).
 var start_provinces: Dictionary = {}
 
 ## M8.5 반란전 전용. 반란전은 일반 warscore·강화 경로를 타지 않는다 (§3, §4).

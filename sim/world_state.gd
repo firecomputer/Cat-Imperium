@@ -109,8 +109,9 @@ static func create(world_seed: int, requested_map_source: int = -1) -> WorldStat
 		w.rng_pool.get_rng("province_split"), w.map_width, nbr)
 	w.nations = NationPlacer.place(w.provinces, w.rng_pool.get_rng("nation_placer"),
 		float(map.get("granularity", 1.0)), w.rng_pool.get_rng("culture_placement"))
-	NationPlacer.assign_names(w.nations, w.rng_pool.get_rng("nation_names"))
+	# 칭호 티어가 empire_threshold 를 읽고, 그 값이 initial_nation_count 에 달렸다.
 	w.initial_nation_count = w.nations.size()
+	NationPlacer.assign_names(w, w.rng_pool.get_rng("nation_names"))
 
 	# 프로빈스는 건국 시 지배국의 문화를 갖는다. 정복해도 이 값은 남아
 	# 문화 거리가 정복지 불만의 항구적 원천이 된다 (§10).

@@ -18,6 +18,9 @@ func _initialize() -> void:
 	_test_subjugating_an_overlord_transfers_its_realm()
 	_test_realm_share_includes_vassals()
 	_test_settled_province_assimilates()
+	_test_title_follows_realm_size()
+	_test_title_demotion_needs_a_real_fall()
+	_test_vassal_title_stays_under_its_overlord()
 	print("empire tests: PASS")
 	quit(0)
 
@@ -182,6 +185,96 @@ func _two_nations() -> WorldState:
 
 func _three_nations() -> WorldState:
 	return _world(3)
+
+
+# ---------------------------------------------------------------- 국명 칭호
+
+## 칭호는 지금 규모가 정한다. 예전에는 세계 생성 때 평평한 목록에서 하나를 뽑고
+## 평생 그대로였다 — 한 칸짜리 나라와 대제국이 똑같이 "공국" 이었다.
+func _test_title_follows_realm_size() -> void:
+	var world := _titled_world(40)
+	var n: Nation = world.nations[0]
+	assert(n.title_tier == NationPlacer.Tier.CITY, "한 칸짜리 나라는 도시국가다")
+	assert(n.name.begins_with(n.stem), "국명은 어간으로 시작한다")
+	var before := n.name
+
+	_annex(world, 1, 0)                          # 2칸 — 평균 위, 아직 왕국
+	world.turn = NationPlacer.TIER_MIN_HOLD_TURNS
+	NationPlacer.tick_titles(world)
+	assert(n.title_tier == NationPlacer.Tier.KINGDOM,
+		"평균을 웃도는 크기는 왕국이다: %d" % n.title_tier)
+
+	for pid in range(2, 6):                      # 6칸 = 세계의 15%, 제국 문턱을 넘는다
+		_annex(world, pid, 0)
+	world.turn = NationPlacer.TIER_MIN_HOLD_TURNS * 2
+	NationPlacer.tick_titles(world)
+	assert(n.title_tier == NationPlacer.Tier.EMPIRE, "제국 크기면 제국으로 개칭된다")
+	assert(n.name != before, "이름이 실제로 바뀌어야 한다")
+	assert(n.name.begins_with(n.stem), "어간은 남는다 — 같은 나라임이 읽혀야 한다")
+
+
+## 국경 한 칸이 오갈 때마다 왕국↔제국 개칭이 기록을 도배하면 안 된다.
+func _test_title_demotion_needs_a_real_fall() -> void:
+	var world := _titled_world(40)
+	var n: Nation = world.nations[0]
+	for pid in range(1, 6):
+		_annex(world, pid, 0)
+	world.turn = NationPlacer.TIER_MIN_HOLD_TURNS
+	NationPlacer.tick_titles(world)
+	assert(n.title_tier == NationPlacer.Tier.EMPIRE)
+
+	_annex(world, 4, 4)                          # 6칸 → 4칸. 승격 문턱 바로 아래다
+	_annex(world, 5, 5)
+	world.turn = NationPlacer.TIER_MIN_HOLD_TURNS * 2
+	NationPlacer.tick_titles(world)
+	assert(n.title_tier == NationPlacer.Tier.EMPIRE,
+		"문턱을 살짝 밑돈 것으로는 강등되지 않는다")
+
+	for pid in range(2, 4):                      # 4칸 → 2칸. 이건 진짜 몰락이다
+		_annex(world, pid, pid)
+	world.turn = NationPlacer.TIER_MIN_HOLD_TURNS * 3
+	NationPlacer.tick_titles(world)
+	assert(n.title_tier < NationPlacer.Tier.EMPIRE, "실제로 무너지면 강등된다")
+
+
+## 속국은 종주국의 진영 크기를 물려받지 않고, 종주국과 같은 칭호도 쓰지 않는다.
+## 예전에는 realm_province_count 가 realm_root 를 타서 1칸짜리 속국까지 제국이 됐다
+## (실측: 917 프로빈스 판에서 제국 문턱 38칸인데 제국 칭호가 31개).
+func _test_vassal_title_stays_under_its_overlord() -> void:
+	var world := _titled_world(40)
+	var overlord: Nation = world.nations[0]
+	var vassal: Nation = world.nations[1]
+	for pid in range(2, 8):                      # 종주국 6칸, 속국 8칸 — 둘 다 제국 크기
+		_annex(world, pid, 0 if pid < 6 else 1)
+	for pid in range(8, 14):
+		_annex(world, pid, 1)
+	assert(NationPlacer.tier_of(world, vassal) == NationPlacer.Tier.EMPIRE,
+		"독립국일 때는 자기 크기대로 제국이다")
+
+	assert(EmpireSystem.vassalize(world, overlord, vassal, false), "복속 성립")
+	world.turn = NationPlacer.TIER_MIN_HOLD_TURNS
+	NationPlacer.tick_titles(world)
+	assert(overlord.title_tier == NationPlacer.Tier.EMPIRE,
+		"종주국은 진영 전체로 재서 제국이다")
+	assert(vassal.title_tier < overlord.title_tier,
+		"속국은 종주국보다 낮은 칭호를 쓴다: %d vs %d" % [
+			vassal.title_tier, overlord.title_tier])
+
+
+## 프로빈스 하나를 다른 나라로 옮긴다.
+func _annex(world: WorldState, pid: int, to_nation: int) -> void:
+	var p: Province = world.provinces[pid]
+	world.nations[p.owner_nation].provinces.erase(pid)
+	p.owner_nation = to_nation
+	if pid not in world.nations[to_nation].provinces:
+		world.nations[to_nation].provinces.append(pid)
+
+
+func _titled_world(count: int) -> WorldState:
+	var world := _world(count)
+	world.initial_nation_count = count            # 제국 문턱이 이 값을 읽는다
+	NationPlacer.assign_names(world, world.rng_pool.get_rng("nation_names"))
+	return world
 
 
 func _world(count: int) -> WorldState:

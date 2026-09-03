@@ -23,6 +23,18 @@
           }
         ]
       }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"/home/firecomputer/cat-imperium/.claude/hooks/guard_parallel.py\"",
+            "timeout": 10
+          }
+        ]
+      }
     ]
   }
 }

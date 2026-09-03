@@ -11,6 +11,8 @@ func _initialize() -> void:
 	_test_coastal_provinces_know_their_zones()
 	_test_zone_split_is_deterministic()
 	_test_embark_takes_a_turn()
+	_test_multi_zone_expedition_reaches_island()
+	_test_broken_expedition_route_sinks_the_convoy()
 	_test_losing_control_sinks_the_convoy()
 	_test_no_control_means_no_crossing()
 	_test_expedition_supply_costs_more_than_the_near_sea()
@@ -72,7 +74,7 @@ func _test_zone_split_is_deterministic() -> void:
 	assert(a.tile_zone == b.tile_zone, "같은 시드는 같은 해역을 만든다")
 
 
-# ---------------------------------------------------------------- 승선 2턴
+# ---------------------------------------------------------------- 승선·상륙
 
 func _test_embark_takes_a_turn() -> void:
 	var world := _strait_world()
@@ -91,6 +93,44 @@ func _test_embark_takes_a_turn() -> void:
 	assert(army.at_sea_zone == -1 and army.province_id == 2, "다음 턴에 상륙한다")
 	assert(army.morale < morale_before, "상륙은 사기를 깎는다")
 	assert(world.armies_at(2).has(army.id), "상륙한 부대는 색인에 돌아온다")
+
+
+func _test_multi_zone_expedition_reaches_island() -> void:
+	var world := _expedition_world()
+	var n: Nation = world.nations[0]
+	n.naval_control_zones[0] = true
+	n.naval_control_zones[1] = true
+	var army: Army = world.armies[0]
+	assert(1 in WarAI._fronts(world, n), "다중 해역 너머 적 섬도 전선으로 잡는다")
+	assert(is_equal_approx(WarAI._hops(world, n, 0, 1), 3.0),
+		"승선·해역 이동·상륙은 각각 한 홉이다")
+
+	WarAI.plan(world)
+	assert(army.at_sea_zone == 0 and army.province_id == -1,
+		"이어진 제해권이 있으면 첫 해역으로 승선한다")
+	assert(army.landing_target == 1, "승선할 때 원정 목적지를 고정한다")
+
+	WarAI.plan(world)
+	assert(army.at_sea_zone == 1 and army.province_id == -1,
+		"원정군은 한 턴에 통제 해역 하나를 전진한다")
+	WarAI.plan(world)
+	assert(army.at_sea_zone == -1 and army.province_id == 1,
+		"마지막 통제 해역에서 적 섬에 상륙한다")
+
+
+func _test_broken_expedition_route_sinks_the_convoy() -> void:
+	var world := _expedition_world()
+	var n: Nation = world.nations[0]
+	n.naval_control_zones[0] = true
+	n.naval_control_zones[1] = true
+	var army: Army = world.armies[0]
+	WarAI.plan(world)
+	assert(army.at_sea_zone == 0, "먼저 원정 항로에 승선한다")
+
+	n.naval_control_zones.erase(1)
+	WarAI.plan(world)
+	assert(not army.is_alive and army.troops == 0,
+		"상륙 전에 통제 해역 사슬이 끊기면 수송선단이 격침된다")
 
 
 func _test_losing_control_sinks_the_convoy() -> void:
@@ -172,6 +212,38 @@ func _strait_world() -> WorldState:
 
 	Diplomacy.declare_war(world, mine, foe, "test")
 	Military.create_army(world, mine, 0, 500)
+	world.rebuild_army_index()
+	return world
+
+
+## 본토(0) — 해역 0 — 해역 1 — 적 섬(1). 양쪽 프로빈스가 같은 해역을 공유하지 않는다.
+func _expedition_world() -> WorldState:
+	var world := WorldState.new()
+	world.rng_pool = RngPool.new(113)
+	for i in range(2):
+		var n := Nation.new()
+		n.id = i
+		n.capital = i
+		world.nations.append(n)
+		var p := Province.new()
+		p.id = i
+		p.owner_nation = i
+		p.population = 1000.0
+		p.infra = 3.0
+		p.is_island = i == 1
+		p.sea_zone_ids = PackedInt32Array([i])
+		world.provinces.append(p)
+		n.provinces.append(i)
+
+	for i in range(2):
+		var zone := SeaZone.new()
+		zone.id = i
+		zone.neighbors = PackedInt32Array([1 - i])
+		zone.coast_provinces = PackedInt32Array([i])
+		world.sea_zones.append(zone)
+
+	Diplomacy.declare_war(world, world.nations[0], world.nations[1], "test")
+	Military.create_army(world, world.nations[0], 0, 500)
 	world.rebuild_army_index()
 	return world
 

@@ -4,6 +4,11 @@ extends SceneTree
 ##
 ##   godot4 --headless --path . --script res://tools/test_view.gd
 
+const NationPalette = preload("res://view/nation_palette.gd")
+## 국가색끼리의 최소 OKLab 거리 하한. 잡으려는 것은 예전 방식의 색 충돌(거리 0)이다.
+## 실측: 40국 0.104, 120국 0.068, 200국 0.051 — 국가 수가 늘어도 여유가 남는 선으로 둔다.
+const PALETTE_MIN_DISTANCE := 0.045
+
 var main: Control
 
 
@@ -39,6 +44,7 @@ func _run() -> void:
 	await process_frame
 
 	_check_names()
+	_check_palette()
 	_check_search()
 	await _check_war_overlay()
 	await _check_naval_view()
@@ -55,6 +61,28 @@ func _check_names() -> void:
 		seen[n.name] = true
 	assert(main._nation_name(0).begins_with(main.world.nations[0].name),
 		"뷰 표기가 국명으로 시작해야 한다")
+
+
+## 색이 겹치면 나라를 가르는 방법이 클릭해서 하나씩 확인하는 것밖에 없다.
+## 같은 색 금지만으로는 부족하다 — 눈에 안 갈리는 이웃 색까지 막아야 한다.
+func _check_palette() -> void:
+	var renderer = main.map_renderer
+	var seen := {}
+	var labs: Array[Vector3] = []
+	for n in main.world.nations:
+		if not n.is_alive:
+			continue
+		var color: Color = renderer._nation_color(n.id)
+		assert(not seen.has(color), "살아 있는 두 나라가 같은 색을 쓰면 안 된다")
+		seen[color] = true
+		labs.append(NationPalette.to_oklab(color))
+	var closest := INF
+	for i in range(labs.size()):
+		for j in range(i + 1, labs.size()):
+			closest = minf(closest, labs[i].distance_to(labs[j]))
+	print("palette: %d개국 최소 OKLab 거리 %.4f" % [labs.size(), closest])
+	assert(closest >= PALETTE_MIN_DISTANCE,
+		"가장 가까운 두 국가색도 눈에 갈릴 만큼 떨어져야 한다: %.4f" % closest)
 
 
 func _check_search() -> void:
@@ -96,6 +124,48 @@ func _check_naval_view() -> void:
 	renderer.set_mode(renderer.MapMode.POLITICAL)
 
 	_check_names()                            # 반란국이 생긴 뒤에도 이름은 유일하다
+	_check_palette()                          # 반란국도 같은 규칙으로 색을 받는다
+	_check_layers()
+	_check_diplomacy_panel()
+
+
+## 새 레이어가 _province_color 의 match 에서 빠지면 조용히 국가 레이어가 그려진다.
+## 그림이 실제로 달라지는지로 본다.
+func _check_layers() -> void:
+	var renderer = main.map_renderer
+	renderer.set_mode(renderer.MapMode.POLITICAL)
+	renderer._rebuild_colors()
+	var political: PackedColorArray = renderer._last_color.duplicate()
+	for layer in [renderer.MapMode.DIPLOMACY, renderer.MapMode.CULTURE,
+			renderer.MapMode.SEPARATISM]:
+		renderer.set_mode(layer)
+		renderer._rebuild_colors()
+		assert(renderer._last_color != political,
+			"레이어 %s 가 국가 레이어와 같은 그림을 그리면 안 된다"
+				% renderer.MODE_NAMES[layer])
+	renderer.set_mode(renderer.MapMode.POLITICAL)
+
+
+## 전쟁 상대·동맹·속국·전쟁 지지도·분리주의는 예전에는 화면 어디에도 없었다.
+func _check_diplomacy_panel() -> void:
+	var at_war := -1
+	for n in main.world.nations:
+		if not n.is_alive or n.provinces.is_empty():
+			continue
+		for war_id in n.wars:
+			if main.world.wars[war_id].is_active:
+				at_war = n.id
+				break
+		if at_war >= 0:
+			break
+	assert(at_war >= 0, "이 시점에는 전쟁 중인 나라가 있어야 한다")
+	main._focus_nation(at_war)
+	var text: String = main.nation_detail.text
+	assert(text.contains("전쟁 지지도"), "전쟁 지지도가 패널에 있어야 한다")
+	assert(text.contains("분리주의"), "선택 지역의 분리주의가 패널에 있어야 한다")
+	assert(text.contains("vs "), "누구와 싸우는지가 패널에 있어야 한다")
+	assert(main.map_renderer.diplomacy_focus == main.selected_nation,
+		"외교 레이어 기준국이 선택 국가를 따라야 한다")
 
 
 ## 전쟁이 붙은 세계에서 지도 오버레이가 실제 교전·공성을 잡아내는지 본다.

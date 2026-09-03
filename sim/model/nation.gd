@@ -2,7 +2,13 @@ class_name Nation extends RefCounted
 
 var id: int = -1
 ## 관전 화면 식별용 국명. 시뮬 계산에는 쓰이지 않는다.
+## 어간(stem)과 칭호(title)의 합성이다 — 통짜 문자열로 들고 있으면 나라가
+## 제국이 되어도 "공국" 이 그대로 남는다 (NationPlacer.retitle).
 var name: String = ""
+var stem: String = ""
+## NationPlacer.Tier. 규모가 정하고 반란국은 Tier.REBEL 에 머문다.
+var title_tier: int = 0
+var title_tier_turn: int = -999           # 마지막 개칭 턴. 잦은 승격·강등을 막는다
 var culture: int = Culture.Kind.KOREAN_SHORTHAIR
 var culture_params: Dictionary = {}
 var capital: int = -1                     # 프로빈스 id
@@ -65,6 +71,9 @@ var bankruptcy_military_mult: float = 1.0
 var military_modifier: float = 1.0
 var army_modifier: float = 1.0
 var supply_range_mult: float = 1.0
+## 0~1. 내각이 전쟁을 정치적으로 지탱하는 힘 (정치 고문 + 군사 고문). 같은 사상자에
+## 지지도를 덜 잃고 같은 승전에 더 얻는다 — 인물이 강한 쪽이 소모전을 오래 버틴다.
+var war_resolve: float = 0.0
 var navy_modifier: float = 1.0
 var sea_supply_mult: float = 1.0
 

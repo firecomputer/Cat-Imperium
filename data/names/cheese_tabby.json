@@ -2,26 +2,95 @@
   "order": "given_family",
   "separator": " ",
   "family": [
-    "Beaumont", "Bernard", "Blanchard", "Chevalier", "Dubois", "Dufour",
-    "Fournier", "Garnier", "Girard", "Lambert", "Laurent", "Leclerc",
-    "Lefèvre", "Marchand", "Mercier", "Moreau", "Perrin", "Renard",
-    "Rousseau", "Vidal"
+    "Beaumont",
+    "Bernard",
+    "Blanchard",
+    "Chevalier",
+    "Dubois",
+    "Dufour",
+    "Fournier",
+    "Garnier",
+    "Girard",
+    "Lambert",
+    "Laurent",
+    "Leclerc",
+    "Lefèvre",
+    "Marchand",
+    "Mercier",
+    "Moreau",
+    "Perrin",
+    "Renard",
+    "Rousseau",
+    "Vidal"
   ],
   "given": [
-    "Adèle", "Amélie", "Bastien", "Camille", "Céleste", "Chloé", "Éloi",
-    "Émile", "Étienne", "Fleur", "Gaspard", "Hugo", "Inès", "Jules", "Léon",
-    "Lucien", "Manon", "Marcel", "Margot", "Noémie", "Océane", "Rémi",
-    "Solène", "Théo"
+    "Adèle",
+    "Amélie",
+    "Bastien",
+    "Camille",
+    "Céleste",
+    "Chloé",
+    "Éloi",
+    "Émile",
+    "Étienne",
+    "Fleur",
+    "Gaspard",
+    "Hugo",
+    "Inès",
+    "Jules",
+    "Léon",
+    "Lucien",
+    "Manon",
+    "Marcel",
+    "Margot",
+    "Noémie",
+    "Océane",
+    "Rémi",
+    "Solène",
+    "Théo"
   ],
   "nation_separator": " ",
   "nation_stems": [
-    "Argenteuil", "Beauvais", "Belfort", "Chandreux", "Foulaine", "Marnac",
-    "Montclair", "Ormont", "Rochefort", "Sancerre", "Valcourt", "Verdier"
+    "Argenteuil",
+    "Beauvais",
+    "Belfort",
+    "Chandreux",
+    "Foulaine",
+    "Marnac",
+    "Montclair",
+    "Ormont",
+    "Rochefort",
+    "Sancerre",
+    "Valcourt",
+    "Verdier"
   ],
-  "nation_titles": [
-    "공국", "왕국", "백작령", "연맹", "자유령"
-  ],
-  "rebel_titles": [
-    "봉기군", "해방전선", "자유령", "혁명군", "코뮌"
-  ]
+  "nation_titles": {
+    "city": [
+      "자유령",
+      "도시국가"
+    ],
+    "minor": [
+      "백작령",
+      "공국"
+    ],
+    "kingdom": [
+      "왕국",
+      "대공국"
+    ],
+    "great": [
+      "연맹",
+      "선제후국"
+    ],
+    "empire": [
+      "제국",
+      "신성제국"
+    ],
+    "rebel": [
+      "봉기군",
+      "해방전선",
+      "자유령",
+      "혁명군",
+      "코뮌"
+    ]
+  }
 }

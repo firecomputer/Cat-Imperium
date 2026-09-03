@@ -53,10 +53,15 @@ func _test_cultures_do_not_cluster() -> void:
 func _test_every_culture_has_names() -> void:
 	for kind in range(Culture.Kind.size()):
 		var data := CharacterSystem.name_data(kind)
-		for key in ["family", "given", "nation_stems", "nation_titles", "rebel_titles"]:
+		for key in ["family", "given", "nation_stems"]:
 			var pool: Array = data.get(key, [])
 			assert(pool.size() >= 5, "%s 의 %s 풀이 너무 작다: %d"
 				% [Culture.NAMES[kind], key, pool.size()])
+		# 티어가 하나라도 비면 그 크기의 나라는 이름을 못 받는다.
+		for tier in range(NationPlacer.TIER_KEYS.size()):
+			var titles := NationPlacer.tier_titles(data, tier)
+			assert(titles.size() >= 2, "%s 의 %s 칭호가 없다"
+				% [Culture.NAMES[kind], NationPlacer.TIER_KEYS[tier]])
 
 
 func _test_quota_matches_nation_count() -> void:

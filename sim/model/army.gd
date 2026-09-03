@@ -16,7 +16,7 @@ var retreating: bool = false
 ## M8.5 치안 분견대. >= 0 이면 그 프로빈스에 묶인 주둔군이며 야전 편성에서 제외된다.
 var garrison_province: int = -1
 ## M9.2 승선. >= 0 이면 그 해역에 떠 있고 province_id 는 -1 이다.
-## 다음 턴에 landing_target 으로 상륙하며, 그 사이 제해권을 잃으면 격침된다.
+## 매 턴 통제 해역을 한 칸 이동해 landing_target 으로 상륙하며, 항로가 끊기면 격침된다.
 var at_sea_zone: int = -1
 var landing_target: int = -1
 

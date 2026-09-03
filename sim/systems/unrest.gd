@@ -268,7 +268,11 @@ static func spawn_new_rebellion(world: WorldState, p: Province, n: Nation) -> vo
 	rebel.capital = p.id
 	# 이름은 봉기 지역에서 나온다. 모국 이름을 물려받으면 같은 나라에서 반란이
 	# 두 번 날 때 이름이 겹친다. 모국은 기록 줄에만 남는다.
-	rebel.name = NationPlacer.rebel_name(world.nations, rebel.culture, p.id)
+	var identity := NationPlacer.rebel_identity(world.nations, rebel.culture, p.id)
+	rebel.stem = identity["stem"]
+	rebel.name = identity["name"]
+	rebel.title_tier = NationPlacer.Tier.REBEL
+	rebel.title_tier_turn = world.turn
 	# 부모의 법률을 물려받지 않는다. 가혹한 법에 반발해 갈라선 세력이
 	# 같은 법을 그대로 쓰면 자기 땅에서 또 반란이 나는 자기증식이 된다.
 	LawSystem.adopt_for(rebel)
